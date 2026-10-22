@@ -1,0 +1,9 @@
+- insert:
+    - id: llm
+      module: adsh-llm
+    - id: session
+      module: adsh-session
+    - id: agent
+      module: adsh-agent
+    - id: sdk-jsonrpc-server
+      module: adsh-sdk-jsonrpc

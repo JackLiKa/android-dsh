@@ -1,0 +1,3 @@
+- insert:
+    - id: sdk-jsonrpc-server
+      module: adsh-sdk-jsonrpc

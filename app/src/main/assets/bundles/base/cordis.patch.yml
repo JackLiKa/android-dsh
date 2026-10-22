@@ -1,0 +1,19 @@
+- insert:
+    - id: llm
+      module: adsh-llm
+    - id: deepseek
+      module: adsh-llm-deepseek
+    - id: session
+      module: adsh-session
+    - id: tools
+      module: adsh-tools
+    - id: agent
+      module: adsh-agent
+    - id: agent-loop
+      module: adsh-agent-loop
+    - id: settings
+      module: adsh-settings
+    - id: credentials
+      module: adsh-credentials
+    - id: approval
+      module: adsh-approval
