@@ -1,19 +1,23 @@
 package com.example.adsh
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -24,71 +28,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-
-@Composable
-fun HistoryScreen(
-    summaries: List<SessionSummary>,
-    workspaces: List<WorkspaceRef>,
-    selectedWorkspaceId: String,
-    enabled: Boolean,
-    onOpen: (String) -> Unit,
-) {
-    var query by remember { mutableStateOf("") }
-    var currentOnly by remember { mutableStateOf(false) }
-    val names = workspaces.associate { it.id to it.name }
-    val visible = summaries.filter { summary ->
-        (!currentOnly || summary.workspaceId == selectedWorkspaceId) &&
-            (summary.preview.contains(query, ignoreCase = true) ||
-                summary.id.contains(query, ignoreCase = true) ||
-                names[summary.workspaceId].orEmpty().contains(query, ignoreCase = true))
-    }
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Text(stringResource(R.string.history), style = MaterialTheme.typography.titleLarge)
-        OutlinedTextField(value = query, onValueChange = { query = it },
-            label = { Text(stringResource(R.string.search_history)) },
-            modifier = Modifier.fillMaxWidth(), singleLine = true)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = !currentOnly, onClick = { currentOnly = false },
-                label = { Text(stringResource(R.string.all_workspaces)) })
-            FilterChip(selected = currentOnly, onClick = { currentOnly = true },
-                label = { Text(stringResource(R.string.current_workspace_only)) })
-        }
-        if (visible.isEmpty()) {
-            Text(stringResource(if (summaries.isEmpty()) R.string.no_history else R.string.no_search_results))
-        } else {
-            LazyColumn(contentPadding = PaddingValues(bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(visible, key = { it.id }) { summary ->
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(summary.preview.ifEmpty { summary.id.take(8) },
-                                style = MaterialTheme.typography.titleSmall)
-                            Text("${names[summary.workspaceId] ?: summary.workspaceId} · " +
-                                stringResource(R.string.history_count, summary.eventCount) + " · " +
-                                SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
-                                    .format(Date(summary.lastEventTime)),
-                                style = MaterialTheme.typography.bodySmall)
-                            TextButton(onClick = { onOpen(summary.id) }, enabled = enabled) {
-                                Text(stringResource(R.string.chat))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 @Composable
 fun WorkspaceScreen(
     workspaces: List<WorkspaceRef>,
-    summaries: List<SessionSummary>,
+    sessionCounts: Map<String, Int>,
     selectedWorkspaceId: String,
     error: String?,
     enabled: Boolean,
@@ -107,25 +55,61 @@ fun WorkspaceScreen(
             enabled = enabled && newName.isNotBlank()) {
             Text(stringResource(R.string.create_workspace))
         }
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        error?.let {
+            Spacer(Modifier.height(4.dp))
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                ),
+            ) {
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
         Spacer(Modifier.height(8.dp))
-        LazyColumn(contentPadding = PaddingValues(bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(workspaces, key = { it.id }) { workspace ->
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(workspace.name, style = MaterialTheme.typography.titleMedium)
-                        Text(stringResource(R.string.workspace_session_count,
-                            summaries.count { it.workspaceId == workspace.id }),
-                            style = MaterialTheme.typography.bodySmall)
-                        Text(workspace.directory.absolutePath,
-                            style = MaterialTheme.typography.labelSmall)
-                        if (selectedWorkspaceId == workspace.id) {
-                            Text(stringResource(R.string.selected),
-                                color = MaterialTheme.colorScheme.primary)
-                        } else {
-                            TextButton(onClick = { onSelect(workspace) }, enabled = enabled) {
-                                Text(stringResource(R.string.select_workspace))
+        if (workspaces.isEmpty()) {
+            Box(Modifier.fillMaxWidth().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Build,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(36.dp),
+                    )
+                    Text(
+                        stringResource(R.string.workspace_empty),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        } else {
+            LazyColumn(contentPadding = PaddingValues(bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(workspaces, key = { it.id }) { workspace ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(workspace.name, style = MaterialTheme.typography.titleMedium)
+                            Text(stringResource(R.string.workspace_session_count,
+                                sessionCounts[workspace.id] ?: 0),
+                                style = MaterialTheme.typography.bodySmall)
+                            Text(workspace.directory.absolutePath,
+                                style = MaterialTheme.typography.labelSmall)
+                            if (selectedWorkspaceId == workspace.id) {
+                                Text(stringResource(R.string.profile_selected_suffix),
+                                    color = MaterialTheme.colorScheme.primary)
+                            } else {
+                                TextButton(onClick = { onSelect(workspace) }, enabled = enabled) {
+                                    Text(stringResource(R.string.select_workspace))
+                                }
                             }
                         }
                     }

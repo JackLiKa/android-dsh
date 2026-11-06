@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
+import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -22,8 +23,10 @@ class SecureSettings(private val context: Context) {
     private val profileName = stringPreferencesKey("profile")
     private val workspaceName = stringPreferencesKey("active_workspace")
     private val sessionName = stringPreferencesKey("active_session")
-    private val providerName = stringPreferencesKey("model_provider")
-    private val modelName = stringPreferencesKey("model_name")
+    private val deviceBridgeEnabled = stringPreferencesKey("device_bridge_enabled")
+    private val deviceBridgeToken = stringPreferencesKey("device_bridge_token")
+    private val themeModeKey = stringPreferencesKey("theme_mode")
+    private val remoteEngineKey = stringPreferencesKey("remote_engine_url")
 
     private fun key(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -59,17 +62,51 @@ class SecureSettings(private val context: Context) {
         context.dataStore.edit { it[sessionName] = id }
     }
 
-    suspend fun selectedModel(): ModelRoute {
-        val values = context.dataStore.data.first()
-        return ModelRoute(values[providerName] ?: BuiltInModels.DEEPSEEK_PROVIDER,
-            values[modelName] ?: BuiltInModels.DEEPSEEK_FLASH)
+    suspend fun clearSessionId() {
+        context.dataStore.edit { it.remove(sessionName) }
     }
 
-    suspend fun setSelectedModel(route: ModelRoute) {
-        context.dataStore.edit {
-            it[providerName] = route.provider
-            it[modelName] = route.model
+    suspend fun deviceBridgeEnabled(): Boolean =
+        context.dataStore.data.first()[deviceBridgeEnabled] == "true"
+
+    suspend fun setDeviceBridgeEnabled(value: Boolean) {
+        context.dataStore.edit { it[deviceBridgeEnabled] = value.toString() }
+    }
+
+    suspend fun deviceBridgeToken(): String {
+        val values = context.dataStore.data.first()
+        values[deviceBridgeToken]?.let { return it }
+        val bytes = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val token = bytes.joinToString("") { "%02x".format(it) }
+        context.dataStore.edit { it[deviceBridgeToken] = token }
+        return token
+    }
+
+    suspend fun themeMode(): String = context.dataStore.data.first()[themeModeKey] ?: "system"
+
+    suspend fun setThemeMode(value: String) {
+        context.dataStore.edit { it[themeModeKey] = value }
+    }
+
+    suspend fun saveRemoteEngineUrl(value: String?) {
+        if (value.isNullOrBlank()) {
+            context.dataStore.edit { it.remove(remoteEngineKey) }
+            return
         }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
+        val encoded = Base64.encodeToString(cipher.iv + cipher.doFinal(value.toByteArray()), Base64.NO_WRAP)
+        context.dataStore.edit { it[remoteEngineKey] = encoded }
+    }
+
+    suspend fun remoteEngineUrl(): String? {
+        val value = context.dataStore.data.first()[remoteEngineKey] ?: return null
+        return runCatching {
+            val bytes = Base64.decode(value, Base64.NO_WRAP)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
+                init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
+            }
+            cipher.doFinal(bytes.copyOfRange(12, bytes.size)).toString(Charsets.UTF_8)
+        }.getOrNull()
     }
 
     suspend fun saveKey(value: String) {

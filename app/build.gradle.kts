@@ -2,7 +2,6 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
-    id("com.google.devtools.ksp")
 }
 
 android {
@@ -24,6 +23,18 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    lint {
+        // 新版 androidx lint 检查器与 AGP 8.7 自带的 Kotlin 分析 API 不兼容（ICCE），
+        // 属于 lint/依赖自身的崩溃而非工程代码问题；仅禁用会崩溃的检查，其余保持开启。
+        disable += "NullSafeMutableLiveData"
+        disable += "FlowOperatorInvokedInComposition"
+        disable += "UnrememberedMutableState"
+        disable += "RememberInComposition"
+        // targetSdk 28 是运行时 Node ELF 可在应用私有目录执行的前提，无法提高到 Play 要求。
+        disable += "ExpiredTargetSdkVersion"
+        abortOnError = true
+        checkReleaseBuilds = false
+    }
 }
 
 dependencies {
@@ -34,11 +45,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
-    implementation("androidx.room:room-runtime:2.8.5")
-    implementation("androidx.room:room-ktx:2.8.5")
-    ksp("androidx.room:room-compiler:2.8.5")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("org.yaml:snakeyaml:2.2")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     testImplementation("junit:junit:4.13.2")
 }
 

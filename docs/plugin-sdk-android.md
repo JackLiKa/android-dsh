@@ -1,6 +1,6 @@
 # Android Plugin SDK 接口草案
 
-状态：已确认的 SDK 目标接口；当前可编译实现涵盖 `Service`、`PluginContext`、`effect`、五种事件分发与卸载，能力 Service Definition 仍待接入。差异与待实现项见 [实现状态](../README.md)。语义取自 [Cordis primer](../../upstream/docs/cordis-primer.md)、[插件扩展手册](../../upstream/docs/cookbook/extension-cookbook.md)、[capability seams](../../upstream/docs/capability-seams.md) 与 [Agent 生命周期](../../upstream/docs/agent-lifecycle.md)。
+状态：Kotlin 宿主侧的目标接口；当前可编译实现涵盖 `Service`、`PluginContext`、`effect`、五种事件分发与卸载，能力 Service Definition 仍待接入。Compose 对话已统一到内置 dsh 引擎（见[架构](architecture-android.md)），本 SDK 描述的是未来 Kotlin/TS 插件与宿主 dsh Service 图对齐的契约。差异与待实现项见 [实现状态](../README.md)。语义取自 [Cordis primer](../../upstream/docs/cordis-primer.md)、[插件扩展手册](../../upstream/docs/cookbook/extension-cookbook.md)、[capability seams](../../upstream/docs/capability-seams.md) 与 [Agent 生命周期](../../upstream/docs/agent-lifecycle.md)。
 
 ## Kotlin 宿主契约
 
