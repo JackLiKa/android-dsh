@@ -46,7 +46,7 @@ class DshEngineService : Service() {
     companion object {
         const val ACTION_START = "com.example.adsh.START_DSH"
         const val ACTION_SAFE_START = "com.example.adsh.START_DSH_SAFE"
-        const val PAYLOAD_SHA256 = "6f5003bd7729135683460d9d85cb0c1b2673dbfea6584046a0de8d6968345fb7"
+        val PAYLOAD_SHA256: String get() = BuildConfig.PAYLOAD_SHA256
         const val IDLE_STOP_MS = 5 * 60_000L
         private const val CHANNEL = "adsh-engine"
         private const val NOTIFICATION_ID = 3080
@@ -205,7 +205,7 @@ class DshEngineService : Service() {
             val timeout = startupTimedOut
             val detail = when {
                 failure != null -> failure
-                timeout -> "启动超时：75 秒内未监听本地端口"
+                timeout -> "启动超时：${BuildConfig.STARTUP_TIMEOUT_MS / 1000} 秒内未监听本地端口"
                 else -> null
             }
             val report = if (detail != null) {
@@ -314,12 +314,12 @@ class DshEngineService : Service() {
             }.start()
         engine = process
         val watchdog = scope.launch {
-            delay(75_000)
+            delay(BuildConfig.STARTUP_TIMEOUT_MS)
             if (engine === process && state.value.phase == EngineStatus.Phase.STARTING) {
                 startupTimedOut = true
                 state.value = EngineStatus(
                     EngineStatus.Phase.FAILED,
-                    "dsh 启动超过 75 秒；检查插件配置和本机日志后重试",
+                    "dsh 启动超过 ${BuildConfig.STARTUP_TIMEOUT_MS / 1000} 秒；检查插件配置和本机日志后重试",
                 )
                 log("启动超时，终止进程")
                 process.destroy()

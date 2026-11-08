@@ -69,6 +69,7 @@
 - `./gradlew --offline :app:lintDebug`：Android Lint 通过（见下方工具链豁免说明）。
 - `./gradlew --offline :app:assembleDebug`：调试 APK 构建通过（约 174 MB，含 Node/dsh payload）。
 - 2026-11-08 离线语音（Vosk）在模拟器 `emulator-5554`（Android 17 / API 37 / x86_64）验证：`OfflineSpeechRecognitionTest` 4 项 instrumentation 测试通过（模型打包、加载幂等、16 kHz 中文 WAV 解码、麦克风会话启停）；WAV 识别输出“欢迎 大家 来 体验 打磨 远 推出 的 语音识别 模型”。同次构建（无 payload）APK 110.1 MB。详见[离线语音识别](docs/vosk-offline-speech.md)。
+- 2026-11-09 使用替代 arm64 运行时（`vosk` 分支本地打包）在模拟器上完成引擎链路验证：安装器完成 160 MB payload 校验/解压、soname 别名与 ELF RUNPATH 修复后，x86_64 模拟器的 ARM 翻译层能启动 Node，日志出现 `dsh web: http://127.0.0.1:3080/?token=***` 与 `dsh Web 已就绪`，界面显示“已连接 dsh 引擎”。该验证使用了临时放宽的 300 秒启动超时（`-PstartupTimeoutMs=300000`）；手机原生 arm64 下保持默认 75 秒。
 - 模拟器 `emulator-5554`（Pixel 6，Android 14，360dp + 1.3 字体）实测：
   - 引擎启动、登录、健康探测成功；模型目录显示 `DeepSeek-V4.1-Flash`。
   - 会话、follow 流、历史列表、日志复制、深色主题保持与设备桥开关撤销均正常。
@@ -134,6 +135,17 @@ JAVA_HOME=/path/to/jdk-21 ./gradlew :app:check :app:assembleDebug
 `targetSdk` 固定为 28，是为了让随附 Node ELF 在应用私有目录中可执行；升级前必须重新验证运行时与平台策略。
 
 若工作区暂时没有 `app/src/main/assets/dsh/payload.zip`（仓库不跟踪），仅做界面/语音验证可在构建命令后加 `-x checkRuntimePayload`；此时 dsh 引擎不可用，语音识别等不依赖引擎的功能仍可验证。
+
+### 使用替代 payload 打包（可选）
+
+如果拿不到固定指纹的参考 payload，可以把任一满足 `runtime/bin/node`、`dshroot/lib/node_modules/@deepseek-ai/dsh/lib/bin.js`、`dshhome/profiles/web/package.json` 布局的 arm64 运行时放到 `app/src/main/assets/dsh/payload.zip`，并用 `-PpayloadSha=<sha256>` 覆盖校验值：
+
+```sh
+sha=$(shasum -a 256 app/src/main/assets/dsh/payload.zip | cut -d' ' -f1)
+./gradlew :app:assembleDebug -PpayloadSha=$sha
+```
+
+安装器会自动恢复 `runtime/lib/LINKS.txt` 里的 soname 别名，并把 ELF 的 Termux `DT_RUNPATH` 改写为 `$ORIGIN`（详见[运行时来源](docs/runtime-provenance.md)）。这样打出的 APK 的运行时并非固定指纹版本，发布前必须重新核对来源、许可证与校验值。
 
 `:app:check` 同时执行单元测试与 `lintDebug`。AGP 8.7.3 自带的 Kotlin 分析 API 与新 Compose/lifecycle lint 检查器存在二进制不兼容（`IncompatibleClassChangeError`），因此精确禁用会崩溃的 7 个检查：`NullSafeMutableLiveData`、`FlowOperatorInvokedInComposition`、`UnrememberedMutableState`、`RememberInComposition`、`AutoboxingStateCreation`、`FrequentlyChangingValue`、`StateFlowValueCalledInComposition`；`targetSdk = 28` 是运行时硬性要求，故豁免 `ExpiredTargetSdkVersion`。其余检查保持开启。
 

@@ -4,6 +4,11 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Default payload is the pinned reference runtime. Local builds may point at an alternative
+// payload.zip with `-PpayloadSha=<sha256>` (used only for local packaging/verification).
+val payloadSha = providers.gradleProperty("payloadSha")
+    .getOrElse("6f5003bd7729135683460d9d85cb0c1b2673dbfea6584046a0de8d6968345fb7")
+
 android {
     namespace = "com.example.adsh"
     compileSdk = 35
@@ -15,13 +20,24 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "PAYLOAD_SHA256", "\"$payloadSha\"")
+        // 75 s for phones; raise locally (e.g. -PstartupTimeoutMs=300000) when running the
+        // arm64 runtime through the x86_64 emulator's ARM translation, which boots much slower.
+        buildConfigField(
+            "long",
+            "STARTUP_TIMEOUT_MS",
+            "${providers.gradleProperty("startupTimeoutMs").getOrElse("75000")}L",
+        )
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     lint {
         // 新版 androidx lint 检查器与 AGP 8.7 自带的 Kotlin 分析 API 不兼容（ICCE），

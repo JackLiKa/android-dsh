@@ -21,3 +21,23 @@ Android APK 内置的 `app/src/main/assets/dsh/payload.zip` 从用户指定的 [
 在设备的隔离测试 profile `hello-test` 中，已通过参考 payload 的 `dsh plugin --profile hello-test add file:<本机测试 bundle> --offline` 安装 upstream 仓库自带的惰性 fixture，随后 `--dump-config` 中出现其三个插入行。首次探针缺少 `TMPDIR` 时内置 pnpm 尝试读取 Termux 私有路径而失败；设置应用私有 cache 目录后重试成功。前台服务配置了该目录、OpenSSL/Git 路径与证书文件，并从用户选择的私有工作区设置 `DSH_WORKSPACE`。registry/git/tarball 安装、构建脚本审批、HMR 卸载、原版 Web 工作区操作以及用户的 Kotlin/TS 插件仍缺真实设备验收。
 
 同版本的原仓库在 macOS arm64 上执行 `pnpm install --frozen-lockfile --ignore-scripts`、`pnpm run build:artifacts`（7/7 gates）与 `pnpm run build:check`（2/2 gates）通过。APK 当前仍使用参考仓库发布物的 Android 专用运行时与补丁；这些产物的可重建性及与本地源码构建产物的逐文件差异待完成审计。
+
+## 替代运行时（2026-11-09 本地完整包）
+
+参考发布仓库（`woaiys3/deepseek-harness-android-app`）已不可访问（HTTP 404），无法取得上表固定的 `6f5003bd…` payload。为完成本机可安装的完整包，改用同布局的公开运行时：
+
+| 项 | 值 |
+|---|---|
+| 来源 | `github.com/guzhou079-arch/deepseek-harness-android` v1.49 发布 APK 的 `assets/payload.zip` |
+| payload SHA-256 | `88bcda193d094837d1639476c58bfaeded34c6addc1717519602bfa88f25e813`（159,737,680 B） |
+| 引擎版本 | `@deepseek-ai/dsh` 0.2.2-rc.1；Node v26.4.0（arm64）；布局 `hoisted-3+sb131` |
+| 构建参数 | `-PpayloadSha=88bcda…`；模拟器验证时另加 `-PstartupTimeoutMs=300000` |
+
+与固定参考版的差异：dsh 0.2.1-rc.2 → 0.2.2-rc.1；来源、校验值与构建可重建性均不同，**不能视为通过本文件第 1 节的固定指纹审计**。
+
+安装器为适配该运行时新增两处兼容处理（`RuntimePayloadInstaller`）：
+
+1. 恢复 `runtime/lib/LINKS.txt` 声明的 soname 别名（hardlink → symlink → copy）。Zip 不携带符号链接；缺少别名时 Node 报 `CANNOT LINK EXECUTABLE … libz.so.1 not found`。
+2. 把 ELF 的 Termux `DT_RUNPATH`（`/data/data/com.termux/files/usr/lib`）原位改写为 `$ORIGIN`（库）/`$ORIGIN/../lib`（可执行文件），使动态链接不依赖 `LD_LIBRARY_PATH`，并修复非直接依赖的查找。
+
+验证：构建后 APK 为 264,658,154 B；模拟器（Android 17 x86_64，ARM 翻译层）日志出现 `dsh web: http://127.0.0.1:3080/?token=***` 与 `dsh Web 已就绪`，界面显示“已连接 dsh 引擎”。该验证不覆盖真机原生 arm64 回归；发布前仍需按固定指纹流程重新审计来源与许可。
