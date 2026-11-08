@@ -19,7 +19,7 @@
 | Plugin Manager 与用户插件 | 原版 Web 运行时含 dsh-plugin-manager；Compose 插件页可查看配置树 | 搜索/inspect/install/remove/enable/disable、构建审批与版本豁免 |
 | Web localhost、Compose/WebView | `DshEngineService` 启动引擎；`DshWebClient` 通过 token 登录一元 RPC 与 mux；Compose 对话全部走该链路；设置页可切换到电脑端远程引擎 | headless/sdk/acp profile、JSON-RPC/AIDL；真实远程主机联调 |
 | 设备能力桥（Android 专属） | 可选 MCP stdio server + 回环 broker；15 个工具；无障碍/通知监听；审计列表；关闭即撤销。按真实 MCP stdio 协议逐一调用 15 个工具全部成功；闹钟/计时器已确认落入系统时钟，`send_sms` 经 `SMS_SENT` 广播返回发送成功/失败/超时回执，模拟器真实写入系统已发送库，真机无线电日志确认发送成功；真机 ColorOS 发送时需在系统确认浮层点“发送”（连续发送均出现，约 8 秒倒计时，否则系统取消），应用不绕过该确认；回执总预算 15 秒，未确认时按超时返回 | 闹钟/短信/拨号在更多 ROM 上的 Intent 兼容性、运营商对短号/敏感号码的拦截、其他 ROM 的权限稳定性、敏感信息遮罩、长时运行与审计导出 |
-| 语音输入与播报 | `VoiceController.kt` 使用 `SpeechRecognizer`（zh-CN、部分结果），短按填输入框、长按识别后直发；运行时请求麦克风；`TextToSpeech` 按消息去重播报已完成回复；真机验证授权弹窗与无识别服务时的错误提示，模拟器验证识别流程与 `zho-CHN` 合成请求 | 带识别服务的 ROM 上验证中文识别、长按直发与 TTS 中断/恢复 |
+| 语音输入与播报 | `OfflineSpeechRecognizer.kt` 内置 Vosk 离线中文识别（`vosk-model-small-cn-0.22`，Apache-2.0，65 MiB，流式部分结果），`VoiceInputController` 在模型缺失时回退系统 `SpeechRecognizer`；短按填输入框、长按识别后直发、悬浮球轻点只填不发；`TextToSpeech` 按消息去重播报已完成回复。2026-11-08 模拟器（Android 17 / x86_64）4 项 instrumentation 通过：模型打包、加载幂等、中文 WAV 解码（输出“欢迎 大家 来 体验 打磨 远 推出 的 语音识别 模型”）、麦克风会话启停；应用壳层安装启动正常 | 真机长句听写与麦克风实测、标点/逆文本规整、不同 ROM 的录音设备与权限行为、大模型或 sherpa-onnx 精度对比 |
 | 手势唤醒 | 无障碍悬浮球（`TYPE_ACCESSIBILITY_OVERLAY`，默认关闭）：轻点打开对话并发起语音，长按只打开对话，可拖动并持久化位置；真机与模拟器均验证轻点跳转、授权触发 | 不同 ROM 上的悬浮层触摸、深色模式与多任务返回后的恢复 |
 | 自动化与远程引擎 | 应用内“自动化”页保存一键任务并发送给引擎（模拟器验证创建、保存与执行回跳对话）；设置页填写 `dsh web` 的 token 地址即可连接电脑端引擎，地址加密保存并可断开；已用电脑端真实引擎验证会话创建与错误回传 | 定时触发/条件触发；真实远程主机的长连接、断网重连与多设备并发 |
 | 工作区、工作目录 | `WorkspaceStore.kt` 创建应用私有目录；设置页选择默认工作区；引擎启动时传入 `DSH_WORKSPACE` | 外部 SAF 项目目录、原版 Web 会话实际 cwd 与文件 Provider 验证 |
@@ -31,4 +31,4 @@
 
 1. 随附 payload 来自第三方 APK 并由本地脚本修复，升级前需复核许可证、校验值与完整性。
 2. 设备桥涉及屏幕内容与通知，仍需在更多厂商 ROM 上复核权限持久性与审计可见性；重装 APK 后系统可能重置无障碍/通知授权。
-3. Android Lint 已纳入 `:app:check`，但受 AGP 8.7.3 与新版 Compose/lifecycle 检查器的二进制不兼容影响，精确禁用了 4 个会崩溃的检查；升级 AGP/lint 后可重新评估。
+3. Android Lint 已纳入 `:app:check`，但受 AGP 8.7.3 与新版 Compose/lifecycle 检查器的二进制不兼容影响，精确禁用了 7 个会崩溃的检查；升级 AGP/lint 后可重新评估。

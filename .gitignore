@@ -16,5 +16,7 @@ local.properties
 *.key
 apks/*.apk
 app/src/main/assets/dsh/*.zip
+# Offline Vosk model (65 MiB): run tools/fetch_vosk_model.py to install before building.
+app/src/main/assets/vosk/
 runtime/previous/*.zip
 runtime/previous/*.apk

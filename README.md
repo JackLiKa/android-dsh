@@ -7,6 +7,7 @@
 - [Kotlin 插件 SDK 契约](docs/plugin-sdk-android.md)
 - [运行时来源与校验](docs/runtime-provenance.md)
 - [真机验证记录](docs/real-device-verification.md)
+- [离线语音识别（Vosk）](docs/vosk-offline-speech.md)
 
 ## 已实现能力
 
@@ -45,7 +46,7 @@
 
 ### 4. 语音、唤醒与自动化
 
-- 对话页麦克风支持语音输入：短按把识别结果填入输入框，长按识别完成后直接发送；首次使用请求 `RECORD_AUDIO`，不可用时提示并保留系统语音输入回退。
+- 对话页麦克风支持语音输入：默认使用随附的 **Vosk 离线中文识别**（Apache-2.0，`assets/vosk/model-cn`，本机推理、流式部分结果，不依赖 Google/系统语音服务）；模型缺失时回退系统 `SpeechRecognizer` 与系统语音 Intent。短按把识别结果填入输入框，长按识别完成后直接发送；首次使用请求 `RECORD_AUDIO`。集成与选型见[离线语音识别](docs/vosk-offline-speech.md)。
 - 助手回复可通过标题栏的朗读开关交给系统 TTS 播报；只朗读已完成的回复，按消息去重，停止生成或出错时不朗读。
 - 无障碍悬浮球默认关闭。开启后常驻屏幕边缘并可拖动：轻点打开对话并开始语音，长按只打开对话，不引入 `SYSTEM_ALERT_WINDOW` 权限。
 - “自动化”页可保存常用任务并一键执行；内置闹钟、计时器、短信预填、查看屏幕、总结通知等示例模板。
@@ -64,9 +65,10 @@
 
 ## 验证状态
 
-- `./gradlew --offline :app:testDebugUnitTest`：47 项 JVM 测试通过。
+- `./gradlew --offline :app:testDebugUnitTest`：52 项 JVM 单测；2026-11-08 本机无 payload 时 51 通过（`RuntimePayloadInstallerTest` 依赖真实 payload，属预期失败）。
 - `./gradlew --offline :app:lintDebug`：Android Lint 通过（见下方工具链豁免说明）。
 - `./gradlew --offline :app:assembleDebug`：调试 APK 构建通过（约 174 MB，含 Node/dsh payload）。
+- 2026-11-08 离线语音（Vosk）在模拟器 `emulator-5554`（Android 17 / API 37 / x86_64）验证：`OfflineSpeechRecognitionTest` 4 项 instrumentation 测试通过（模型打包、加载幂等、16 kHz 中文 WAV 解码、麦克风会话启停）；WAV 识别输出“欢迎 大家 来 体验 打磨 远 推出 的 语音识别 模型”。同次构建（无 payload）APK 110.1 MB。详见[离线语音识别](docs/vosk-offline-speech.md)。
 - 模拟器 `emulator-5554`（Pixel 6，Android 14，360dp + 1.3 字体）实测：
   - 引擎启动、登录、健康探测成功；模型目录显示 `DeepSeek-V4.1-Flash`。
   - 会话、follow 流、历史列表、日志复制、深色主题保持与设备桥开关撤销均正常。
@@ -87,7 +89,15 @@
 
 ### 准备运行时
 
-本仓库只跟踪代码和文档。APK、Node/dsh payload 及参考 payload 备份超过 GitHub 普通文件限制，均由 `.gitignore` 排除。首次克隆后先准备运行时；本地生成的 APK 包含完整 payload，运行时不依赖再次下载。参考发布包的来源、许可证与 SHA-256 见[运行时来源](docs/runtime-provenance.md)。
+本仓库只跟踪代码和文档。APK、Node/dsh payload、参考 payload 备份与 Vosk 中文模型均超过 GitHub 普通文件限制，由 `.gitignore` 排除。首次克隆后先准备运行时；本地生成的 APK 包含完整 payload，运行时不依赖再次下载。参考发布包的来源、许可证与 SHA-256 见[运行时来源](docs/runtime-provenance.md)。
+
+离线语音模型（65 MiB）在构建前单独准备：
+
+```sh
+python3 tools/fetch_vosk_model.py
+```
+
+脚本会下载 `vosk-model-small-cn-0.22`、校验 SHA-256 并解压到 `app/src/main/assets/vosk/model-cn`，详见[离线语音识别](docs/vosk-offline-speech.md)。
 
 在本仓库同级检出上游源码并安装依赖（源码修复脚本使用其 `restructure@3.0.2` 完整包）：
 
@@ -123,7 +133,9 @@ JAVA_HOME=/path/to/jdk-21 ./gradlew :app:check :app:assembleDebug
 
 `targetSdk` 固定为 28，是为了让随附 Node ELF 在应用私有目录中可执行；升级前必须重新验证运行时与平台策略。
 
-`:app:check` 同时执行单元测试与 `lintDebug`。AGP 8.7.3 自带的 Kotlin 分析 API 与新 Compose/lifecycle lint 检查器存在二进制不兼容（`IncompatibleClassChangeError`），因此精确禁用会崩溃的 4 个检查：`NullSafeMutableLiveData`、`FlowOperatorInvokedInComposition`、`UnrememberedMutableState`、`RememberInComposition`；`targetSdk = 28` 是运行时硬性要求，故豁免 `ExpiredTargetSdkVersion`。其余检查保持开启。
+若工作区暂时没有 `app/src/main/assets/dsh/payload.zip`（仓库不跟踪），仅做界面/语音验证可在构建命令后加 `-x checkRuntimePayload`；此时 dsh 引擎不可用，语音识别等不依赖引擎的功能仍可验证。
+
+`:app:check` 同时执行单元测试与 `lintDebug`。AGP 8.7.3 自带的 Kotlin 分析 API 与新 Compose/lifecycle lint 检查器存在二进制不兼容（`IncompatibleClassChangeError`），因此精确禁用会崩溃的 7 个检查：`NullSafeMutableLiveData`、`FlowOperatorInvokedInComposition`、`UnrememberedMutableState`、`RememberInComposition`、`AutoboxingStateCreation`、`FrequentlyChangingValue`、`StateFlowValueCalledInComposition`；`targetSdk = 28` 是运行时硬性要求，故豁免 `ExpiredTargetSdkVersion`。其余检查保持开启。
 
 ### 安装与启动
 
@@ -148,3 +160,6 @@ adb -s <serial> shell am start -n com.example.adsh/.MainActivity --es profile we
 - 设备桥依赖无障碍与通知监听权限，不同厂商 ROM 可能限制后台前台服务或无障碍连接（真机 PJA110 上已通过）。
 - payload 来自第三方发布 APK 并由本地脚本修复，升级与再分发前需重新核对许可证和校验值；详见[运行时来源](docs/runtime-provenance.md)。
 - 历史会话与工作区由 dsh 引擎持久化；应用内“工作区”页只负责选择新会话的初始目录，不迁移引擎已有会话。
+- 离线语音使用小模型 `vosk-model-small-cn-0.22`（65 MiB），同音/近音词会识别错误（如“达摩院”→“打磨远”），且输出无标点；追求精度可换大模型或迁移 sherpa-onnx。
+- 离线模型使 APK 增加约 65 MiB；模型与 payload 一样不入库，首次构建需运行 `tools/fetch_vosk_model.py`。
+- 随附 dsh payload 只含 arm64 的 Node ELF，x86_64 模拟器无法启动引擎；模拟器上的语音验证通过 instrumentation 直接覆盖识别与录音层，而非“引擎就绪 + 点麦克风”的整条 UI 链路。

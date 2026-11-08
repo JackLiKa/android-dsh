@@ -17,7 +17,9 @@ class WorkspaceStoreTest {
         val created = store.create("  测试项目  ")
         assertEquals("测试项目", created.name)
         assertEquals(listOf("default", created.id), WorkspaceStore(root).list().map { it.id })
-        assertTrue(created.directory.canonicalPath.startsWith(root.canonicalPath + "/"))
+        assertTrue(
+            created.directory.canonicalPath.startsWith(root.canonicalPath + java.io.File.separator),
+        )
         assertThrows(IllegalArgumentException::class.java) { store.create("测试项目") }
     }
 

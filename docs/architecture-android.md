@@ -86,7 +86,7 @@ MCP 子进程环境会清除凭据型变量与 `DSH_*`，设备桥 token 只通�
 
 ## 语音、唤醒与自动化
 
-- `VoiceController.kt` 封装 `SpeechRecognizer` 与 `TextToSpeech`：识别使用 zh-CN 与部分结果，短按填入输入框、长按识别后直接发送；TTS 按助手消息去重，只朗读已完成的回复。
+- `OfflineSpeechRecognizer.kt` 封装 Vosk 离线中文识别：首次把 `assets/vosk/model-cn`（`vosk-model-small-cn-0.22`，65 MiB）复制到 `filesDir/vosk/model-cn` 并加载 `Model`，用 `SpeechService` + `AudioRecord` 流式识别，`onPartialResult` 映射部分结果、`onFinalResult` 触发长按直发；`decodePcm()` 供 instrumentation 直接解码 WAV。`VoiceInputController` 优先走离线引擎，模型缺失时回退系统 `SpeechRecognizer`；TTS 仍由 `ReplySpeaker` 负责（按助手消息去重，只朗读已完成的回复）。选型与验证见[离线语音识别](vosk-offline-speech.md)。
 - `AdshAccessibilityService` 额外维护可选的悬浮球：`TYPE_ACCESSIBILITY_OVERLAY` 不需要悬浮窗权限，轻点通过 `MainActivity.EXTRA_VOICE_START` 打开对话并发起语音，长按只打开对话，拖动位置写入 `adsh_wake` 偏好。
 - `AutomationStore` 用 SharedPreferences 保存一键任务；`AutomationScreen` 负责创建、删除与执行，执行即把任务内容发送给当前引擎。
 - 远程引擎：`SecureSettings` 用 AndroidKeyStore 加密保存电脑端 `dsh web` 的 token 地址；`DshChatController.attach` 与本地引擎共用同一 HTTP/WebSocket 客户端。启用远程地址后本机引擎可保持停止。
@@ -116,7 +116,9 @@ MCP 子进程环境会清除凭据型变量与 `DSH_*`，设备桥 token 只通�
 | `engine/EngineLogStore.kt`、`EngineCrash.kt` | 日志持久化与崩溃归因 |
 | `engine/EngineRestartPolicy.kt`、`EngineIdlePolicy.kt` | 重启与空闲策略 |
 | `device/*` | broker、MCP patch、无障碍/通知服务、悬浮球、审计 |
-| `VoiceController.kt` | 语音识别与 TTS 播报 |
+| `VoiceController.kt` | 语音门面：`VoiceInputController`（离线 Vosk 优先、系统识别回退）与 `ReplySpeaker`（TTS 播报） |
+| `OfflineSpeechRecognizer.kt` | Vosk 模型加载/录音会话/部分结果与最终结果、`decodePcm()` 测试入口 |
+| `assets/vosk/model-cn/` | 随附中文模型（gitignore，`tools/fetch_vosk_model.py` 生成） |
 | `AutomationStore.kt`、`AutomationScreen.kt` | 一键任务存储与自动化页面 |
 | `ui/Theme.kt` | 主题、字体、形状 |
 | `assets/dsh-bridge/mcp-server.mjs` | 零依赖 MCP stdio server |

@@ -11,17 +11,31 @@ import java.util.Locale
 
 data class VoiceResult(val text: String, val isFinal: Boolean)
 
-/** SpeechRecognizer wrapper; callbacks fire on the main thread. */
+/**
+ * Voice input facade; callbacks fire on the main thread.
+ *
+ * Engine order:
+ * 1. Bundled offline Vosk model (`assets/vosk/model-cn`) — works without Google/system speech services,
+ *    fully on device, streaming partial results.
+ * 2. System [SpeechRecognizer] as a fallback when the offline model is not packaged in the APK.
+ */
 class VoiceInputController(context: Context) {
     private val appContext = context.applicationContext
+    private val offline = OfflineSpeechRecognizer(appContext)
     private var recognizer: SpeechRecognizer? = null
     private var running = false
+    private var usingOffline = false
 
     var onResult: ((VoiceResult) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
     var onListeningChanged: ((Boolean) -> Unit)? = null
 
-    fun available(): Boolean = SpeechRecognizer.isRecognitionAvailable(appContext)
+    /** True when the bundled offline model is present or a system recognizer exists. */
+    fun available(): Boolean =
+        offline.assetsInstalled() || SpeechRecognizer.isRecognitionAvailable(appContext)
+
+    /** True when the current/last session used the offline engine (diagnostics). */
+    fun usingOfflineEngine(): Boolean = usingOffline
 
     fun isListening(): Boolean = running
 
@@ -30,7 +44,32 @@ class VoiceInputController(context: Context) {
             onError?.invoke("当前设备没有可用的语音识别服务")
             return
         }
+        if (offline.assetsInstalled()) startOffline() else startSystem()
+    }
+
+    private fun startOffline() {
         releaseRecognizer()
+        usingOffline = true
+        offline.onListeningChanged = { listening -> setListening(listening) }
+        offline.onPartial = { text ->
+            if (text.isNotBlank()) onResult?.invoke(VoiceResult(text, isFinal = false))
+        }
+        offline.onFinal = { text ->
+            setListening(false)
+            if (text.isBlank()) onError?.invoke("没有识别到语音内容")
+            else onResult?.invoke(VoiceResult(text, isFinal = true))
+        }
+        offline.onError = { message ->
+            setListening(false)
+            onError?.invoke(message)
+        }
+        setListening(true)
+        offline.start()
+    }
+
+    private fun startSystem() {
+        releaseRecognizer()
+        usingOffline = false
         val created = SpeechRecognizer.createSpeechRecognizer(appContext)
         recognizer = created
         created.setRecognitionListener(object : RecognitionListener {
@@ -71,12 +110,19 @@ class VoiceInputController(context: Context) {
 
     fun stop() {
         if (!running) return
+        if (usingOffline) offline.stop() else recognizer?.stopListening()
         setListening(false)
-        recognizer?.stopListening()
     }
 
     fun release() {
         setListening(false)
+        if (usingOffline) {
+            offline.onPartial = null
+            offline.onFinal = null
+            offline.onError = null
+            offline.onListeningChanged = null
+            offline.release()
+        }
         releaseRecognizer()
     }
 

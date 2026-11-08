@@ -30,6 +30,11 @@ android {
         disable += "FlowOperatorInvokedInComposition"
         disable += "UnrememberedMutableState"
         disable += "RememberInComposition"
+        disable += "AutoboxingStateCreation"
+        // FrequentlyChangingValue 检查器在 AGP 8.7.3 下会经 RememberInCompositionDetectorKt 触发 ICCE。
+        disable += "FrequentlyChangingValue"
+        // ComposableStateFlowValueDetector 在 AGP 8.7.3 下会经 ComposableUtilsKt 触发 ICCE。
+        disable += "StateFlowValueCalledInComposition"
         // targetSdk 28 是运行时 Node ELF 可在应用私有目录执行的前提，无法提高到 Play 要求。
         disable += "ExpiredTargetSdkVersion"
         abortOnError = true
@@ -48,7 +53,11 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("org.yaml:snakeyaml:2.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Offline Chinese speech recognition (Apache-2.0). Model lives in assets/vosk/model-cn.
+    implementation("com.alphacephei:vosk-android:0.3.47")
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }
 
 val checkRuntimePayload by tasks.registering {
