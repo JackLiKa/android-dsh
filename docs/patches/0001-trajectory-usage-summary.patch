@@ -1,0 +1,459 @@
+diff --git a/packages/client/ui-trajectory/package.json b/packages/client/ui-trajectory/package.json
+index 9c643882..85a490f9 100644
+--- a/packages/client/ui-trajectory/package.json
++++ b/packages/client/ui-trajectory/package.json
+@@ -66,6 +66,7 @@
+     "@deepseek-ai/dsh-client-ui-renderer": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-session": "workspace:*",
+     "@deepseek-ai/dsh-llm": "workspace:*",
++    "@deepseek-ai/dsh-token-meter": "workspace:*",
+     "@deepseek-ai/dsh-attachment": "workspace:*",
+     "@tanstack/react-virtual": "3.14.10",
+     "diff": "^9.0.0"
+diff --git a/packages/client/ui-trajectory/src/client/TrajectorySummary.module.css b/packages/client/ui-trajectory/src/client/TrajectorySummary.module.css
+new file mode 100644
+index 00000000..d7cefbd3
+--- /dev/null
++++ b/packages/client/ui-trajectory/src/client/TrajectorySummary.module.css
+@@ -0,0 +1,56 @@
++/* Slim session-usage strip under the toolbar: horizontal scroll on narrow panels. */
++
++.root {
++  flex: none;
++  overflow-x: auto;
++  overflow-y: hidden;
++  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
++  background: var(--dsw-alias-bg-layer-2);
++  scrollbar-width: none;
++}
++
++.root::-webkit-scrollbar {
++  display: none;
++}
++
++.inner {
++  display: flex;
++  align-items: center;
++  box-sizing: border-box;
++  gap: 14px;
++  width: max-content;
++  min-width: 100%;
++  height: 28px;
++  padding: 0 10px;
++  font: var(--dsw-font-xxs-12);
++  white-space: nowrap;
++}
++
++.metric {
++  display: inline-flex;
++  flex: none;
++  align-items: baseline;
++  gap: 4px;
++}
++
++.label {
++  color: var(--dsw-alias-label-tertiary);
++}
++
++.value {
++  color: var(--dsw-alias-label-primary);
++  font-variant-numeric: tabular-nums;
++}
++
++.percent {
++  color: var(--dsw-alias-label-secondary);
++  font-variant-numeric: tabular-nums;
++}
++
++.percent[data-level='warn'] {
++  color: var(--dsw-alias-state-warn-label);
++}
++
++.percent[data-level='error'] {
++  color: var(--dsw-alias-state-error-primary);
++}
+diff --git a/packages/client/ui-trajectory/src/client/TrajectorySummary.tsx b/packages/client/ui-trajectory/src/client/TrajectorySummary.tsx
+new file mode 100644
+index 00000000..c8ba87f1
+--- /dev/null
++++ b/packages/client/ui-trajectory/src/client/TrajectorySummary.tsx
+@@ -0,0 +1,109 @@
++/** Session-wide usage strip under the toolbar: cache hits, context occupancy,
++ * session tokens, and request count. It reads projections only, so it keeps
++ * working while the ledger itself is paged or filtered. */
++
++import type { ReactNode } from 'react'
++import type {
++  ContextPressureProjection, TokenUsageProjection,
++} from '@deepseek-ai/dsh-token-meter/client'
++import type { TrajectoryTranslate } from './locales.ts'
++import { cacheHitPercent } from './usage-metrics.ts'
++import css from './TrajectorySummary.module.css'
++
++/** Occupancy thresholds that recolor the percent reading. */
++const WARN_PERCENT = 75
++const ERROR_PERCENT = 90
++
++/**
++ * Compact token count for the strip.
++ * @param value - token count.
++ * @param t - trajectory locale seat.
++ * @returns Count using the locale's thousand or million unit when scaled.
++ */
++function compactTokens(value: number, t: TrajectoryTranslate): string {
++  const scaled = (candidate: number): string => candidate >= 100
++    ? String(Math.round(candidate))
++    : String(Math.round(candidate * 10) / 10)
++  if (value < 1_000) return String(value)
++  if (value < 1_000_000) return t('unit.thousand', { value: scaled(value / 1_000) })
++  return t('unit.million', { value: scaled(value / 1_000_000) })
++}
++
++/** One labelled reading in the strip. */
++function Metric({ label, children }: { label: string; children: ReactNode }) {
++  return (
++    <span className={css.metric}>
++      <span className={css.label}>{label}</span>
++      {children}
++    </span>
++  )
++}
++
++export interface TrajectorySummaryProps {
++  /** Cumulative provider usage across the complete session log. */
++  tokenUsage: TokenUsageProjection | undefined
++  /** Newest request pressure paired with the newest known capacity. */
++  pressure: ContextPressureProjection | undefined
++  /** Non-compaction requests recorded in the complete session log. */
++  requestCount: number
++  /** Trajectory locale seat. */
++  t: TrajectoryTranslate
++}
++
++export function TrajectorySummary({ tokenUsage, pressure, requestCount, t }: TrajectorySummaryProps) {
++  const usage = tokenUsage === undefined
++    ? undefined
++    : {
++      input: tokenUsage.uncachedInputTokens,
++      cacheRead: tokenUsage.cacheReadTokens,
++      cacheWrite: tokenUsage.cacheWriteTokens,
++    }
++  const hit = usage === undefined ? null : cacheHitPercent(usage)
++  const usedTokens = pressure?.projectedTokens ?? pressure?.pressureTokens
++  const percent = usedTokens === undefined || pressure?.contextWindow === undefined
++    ? null
++    : Math.min(100, Math.round(usedTokens / pressure.contextWindow * 100))
++  const level = percent === null
++    ? undefined
++    : percent >= ERROR_PERCENT ? 'error' : percent >= WARN_PERCENT ? 'warn' : undefined
++  const sessionTokens = tokenUsage === undefined
++    ? undefined
++    : tokenUsage.uncachedInputTokens + tokenUsage.cacheReadTokens
++      + tokenUsage.cacheWriteTokens + tokenUsage.outputTokens
++
++  if (hit === null && usedTokens === undefined && sessionTokens === undefined) return null
++
++  return (
++    <div className={css.root} role="group" aria-label={t('summary.aria')}>
++      <div className={css.inner}>
++        <Metric label={t('summary.cacheHit')}>
++          <span className={css.value}>
++            {hit === null ? t('summary.unavailable') : t('unit.percent', { value: hit })}
++          </span>
++        </Metric>
++        {usedTokens !== undefined && (
++          <Metric label={t('summary.context')}>
++            {percent !== null && (
++              <span className={css.percent} data-level={level}>
++                {t('unit.percent', { value: percent })}
++              </span>
++            )}
++            <span className={css.value}>
++              {pressure?.contextWindow === undefined
++                ? compactTokens(usedTokens, t)
++                : `${compactTokens(usedTokens, t)} / ${compactTokens(pressure.contextWindow, t)}`}
++            </span>
++          </Metric>
++        )}
++        {sessionTokens !== undefined && (
++          <Metric label={t('summary.tokens')}>
++            <span className={css.value}>{compactTokens(sessionTokens, t)}</span>
++          </Metric>
++        )}
++        <Metric label={t('summary.requests')}>
++          <span className={css.value}>{t('summary.requestsValue', { count: requestCount })}</span>
++        </Metric>
++      </div>
++    </div>
++  )
++}
+diff --git a/packages/client/ui-trajectory/src/client/TrajectoryTable.tsx b/packages/client/ui-trajectory/src/client/TrajectoryTable.tsx
+index 4cf15a08..675e51fc 100644
+--- a/packages/client/ui-trajectory/src/client/TrajectoryTable.tsx
++++ b/packages/client/ui-trajectory/src/client/TrajectoryTable.tsx
+@@ -32,6 +32,7 @@ import type {
+   AssistantMetricDetail, TrajectoryCellKind, TrajectoryCellProps, TrajectorySourceBlock,
+ } from './trajectory-record.ts'
+ import { formatElapsedSeconds, trajectoryRecordId } from './trajectory-record.ts'
++import { cacheHitPercent } from './usage-metrics.ts'
+ import {
+   groupTrajectoryVirtualRows, trajectoryVirtualRecordKey,
+ } from './trajectory-virtual-rows.ts'
+@@ -790,6 +791,7 @@ function inputTotal(usage: TrajectoryUsage): number | undefined {
+ function UsageRows({ usage, t }: { usage: TrajectoryUsage | undefined; t: TrajectoryTranslate }) {
+   if (usage === undefined) return <p className={css.noPayload}>{t('usage.notReported')}</p>
+   const totalInput = inputTotal(usage)
++  const cacheHit = cacheHitPercent(usage)
+   const otherOutput = usage.output !== undefined && usage.reasoning !== undefined
+     ? usage.output - usage.reasoning
+     : undefined
+@@ -810,6 +812,12 @@ function UsageRows({ usage, t }: { usage: TrajectoryUsage | undefined; t: Trajec
+           <dd>{t('unit.tokens', { value: usage.cacheWrite })}</dd>
+         </div>
+       )}
++      {cacheHit !== null && (
++        <div className={css.requestTokenDetail}>
++          <dt>{t('usage.cacheHit')}</dt>
++          <dd>{t('unit.percent', { value: cacheHit })}</dd>
++        </div>
++      )}
+       {usage.input !== undefined && (
+         <div className={css.requestTokenDetail}>
+           <dt>{t('usage.other')}</dt>
+diff --git a/packages/client/ui-trajectory/src/client/TrajectoryView.tsx b/packages/client/ui-trajectory/src/client/TrajectoryView.tsx
+index e36386e8..878fdedb 100644
+--- a/packages/client/ui-trajectory/src/client/TrajectoryView.tsx
++++ b/packages/client/ui-trajectory/src/client/TrajectoryView.tsx
+@@ -7,12 +7,15 @@ import type {
+ } from '@deepseek-ai/dsh-client-ui-conversation/client'
+ import type { InjectFace, PropsLocale, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
+ import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
++// Type-only: the `tokenUsage` / `contextPressure` projection key merges.
++import type {} from '@deepseek-ai/dsh-token-meter/client'
+ import type { JsonTreeProps } from '@deepseek-ai/dsh-client-ui-primitives'
+ import {
+   TrajectoryTable,
+   type TrajectoryRequestNumber,
+   type TrajectoryUsage,
+ } from './TrajectoryTable.tsx'
++import { TrajectorySummary } from './TrajectorySummary.tsx'
+ import { TrajectoryToolbar } from './TrajectoryToolbar.tsx'
+ import { TrajectoryTimeline } from './TrajectoryTimeline.tsx'
+ import {
+@@ -130,8 +133,8 @@ function addUsage(
+ }
+ 
+ export function TrajectoryView({
+-  useSession, useTrajectory, useDuration, loadOlder, loadImage, setActualDuration,
+-  viewRequest, completeViewRequest, renderSlot, t, jsonStringWrapping,
++  useSession, useTrajectory, useDuration, useProjection, loadOlder, loadImage,
++  setActualDuration, viewRequest, completeViewRequest, renderSlot, t, jsonStringWrapping,
+ }: ConvViewProps
+   & Pick<PropsRenderSlots<'conversation.trajectory.images'>, 'renderSlot'>
+   & InjectFace<TrajectoryViewInjected>
+@@ -310,6 +313,12 @@ export function TrajectoryView({
+   }, [
+     completeInspection.eventNodes, completeInspection.requests, t,
+   ])
++  const tokenUsage = useProjection('tokenUsage')
++  const contextPressure = useProjection('contextPressure')
++  const requestCount = useMemo(
++    () => requestNumbers.filter(request => request.purpose !== 'compaction').length,
++    [requestNumbers],
++  )
+   const partialTurn = partial?.turn ?? null
+   const partialStep = partial?.step ?? null
+   const finalized = useMemo(() => {
+@@ -530,6 +539,12 @@ export function TrajectoryView({
+         onSearchQueryChange={setSearchQuery}
+         t={t}
+       />
++      <TrajectorySummary
++        tokenUsage={tokenUsage}
++        pressure={contextPressure}
++        requestCount={requestCount}
++        t={t}
++      />
+       <TrajectoryTimeline
+         t={t}
+         turns={timelineTurns}
+diff --git a/packages/client/ui-trajectory/src/client/locales.ts b/packages/client/ui-trajectory/src/client/locales.ts
+index b13a1466..ab2b3ff4 100644
+--- a/packages/client/ui-trajectory/src/client/locales.ts
++++ b/packages/client/ui-trajectory/src/client/locales.ts
+@@ -65,6 +65,9 @@ export const zh = {
+   'unit.seconds': '{value} 秒',
+   'unit.tokens': '{value} tok',
+   'unit.tokensPerSecond': '{value} tok/s',
++  'unit.percent': '{value}%',
++  'unit.thousand': '{value}k',
++  'unit.million': '{value}M',
+   'usage.tokens': 'Token',
+   'usage.reasoning': '推理',
+   'usage.content': '内容',
+@@ -72,6 +75,7 @@ export const zh = {
+   'usage.input': '输入',
+   'usage.cached': '缓存读取',
+   'usage.cacheCreated': '缓存写入',
++  'usage.cacheHit': '缓存命中率',
+   'usage.other': '其他',
+   'usage.output': '输出',
+   'usage.thisRequest': '本次请求',
+@@ -149,6 +153,13 @@ export const zh = {
+   'summary.toolCalls.other': '{count} 个工具调用',
+   'summary.steps.one': '{count} 个步骤',
+   'summary.steps.other': '{count} 个步骤',
++  'summary.aria': '会话用量',
++  'summary.cacheHit': '缓存命中',
++  'summary.context': '上下文',
++  'summary.tokens': '会话 Token',
++  'summary.requests': '请求',
++  'summary.requestsValue': '{count} 次',
++  'summary.unavailable': '—',
+   'details.event': '事件详情',
+   'details.resize': '调整事件详情宽度',
+   'details.resizeTitle': '拖动调整大小；双击恢复默认值。',
+@@ -275,6 +286,9 @@ export const en: Record<TrajectoryKey, string> = {
+   'unit.seconds': '{value} s',
+   'unit.tokens': '{value} tok',
+   'unit.tokensPerSecond': '{value} tok/s',
++  'unit.percent': '{value}%',
++  'unit.thousand': '{value}k',
++  'unit.million': '{value}M',
+   'usage.tokens': 'Tokens',
+   'usage.reasoning': 'Reasoning',
+   'usage.content': 'Content',
+@@ -282,6 +296,7 @@ export const en: Record<TrajectoryKey, string> = {
+   'usage.input': 'Input',
+   'usage.cached': 'Cached',
+   'usage.cacheCreated': 'Cache created',
++  'usage.cacheHit': 'Cache hit rate',
+   'usage.other': 'Other',
+   'usage.output': 'Output',
+   'usage.thisRequest': 'This request',
+@@ -359,6 +374,13 @@ export const en: Record<TrajectoryKey, string> = {
+   'summary.toolCalls.other': '{count} tool calls',
+   'summary.steps.one': '{count} step',
+   'summary.steps.other': '{count} steps',
++  'summary.aria': 'Session usage',
++  'summary.cacheHit': 'Cache hit',
++  'summary.context': 'Context',
++  'summary.tokens': 'Session tokens',
++  'summary.requests': 'Requests',
++  'summary.requestsValue': '{count}',
++  'summary.unavailable': '—',
+   'details.event': 'Event details',
+   'details.resize': 'Resize event details',
+   'details.resizeTitle': 'Drag to resize. Double-click to reset.',
+diff --git a/packages/client/ui-trajectory/src/client/usage-metrics.ts b/packages/client/ui-trajectory/src/client/usage-metrics.ts
+new file mode 100644
+index 00000000..ed2d776b
+--- /dev/null
++++ b/packages/client/ui-trajectory/src/client/usage-metrics.ts
+@@ -0,0 +1,33 @@
++/** Pure display metrics shared by the trajectory summary and usage panels. */
++
++/** Prompt-side buckets as reported by a provider for one request or a session. */
++export interface CacheUsageLike {
++  input?: number
++  cacheRead?: number
++  cacheWrite?: number
++}
++
++/**
++ * Prompt-side total of one usage sample.
++ * @param usage - provider-reported buckets.
++ * @returns uncached input plus cache reads and writes.
++ */
++export function promptTokens(usage: CacheUsageLike): number {
++  return Math.max(0, usage.input ?? 0)
++    + Math.max(0, usage.cacheRead ?? 0)
++    + Math.max(0, usage.cacheWrite ?? 0)
++}
++
++/**
++ * Display-ready cache-hit share, never rounding a partial hit up to 100.
++ * @param usage - provider-reported prompt buckets.
++ * @returns percentage text, or null when the sample has no prompt input.
++ */
++export function cacheHitPercent(usage: CacheUsageLike): string | null {
++  const prompt = promptTokens(usage)
++  if (prompt === 0) return null
++  const cached = Math.max(0, usage.cacheRead ?? 0)
++  if (cached === prompt) return '100'
++  const tenths = Math.min(999, Math.round(cached / prompt * 1_000))
++  return tenths % 10 === 0 ? String(tenths / 10) : (tenths / 10).toFixed(1)
++}
+diff --git a/packages/client/ui-trajectory/tests/usage-metrics.spec.ts b/packages/client/ui-trajectory/tests/usage-metrics.spec.ts
+new file mode 100644
+index 00000000..ad600555
+--- /dev/null
++++ b/packages/client/ui-trajectory/tests/usage-metrics.spec.ts
+@@ -0,0 +1,39 @@
++import { describe, expect, it } from 'vitest'
++import { cacheHitPercent, promptTokens } from '../src/client/usage-metrics.ts'
++
++describe('promptTokens', () => {
++  it('sums the disjoint prompt buckets', () => {
++    expect(promptTokens({ input: 10, cacheRead: 80, cacheWrite: 5 })).toBe(95)
++  })
++
++  it('treats absent and negative buckets as zero', () => {
++    expect(promptTokens({})).toBe(0)
++    expect(promptTokens({ input: -4, cacheRead: 3 })).toBe(3)
++  })
++})
++
++describe('cacheHitPercent', () => {
++  it('returns null without prompt input', () => {
++    expect(cacheHitPercent({})).toBeNull()
++    expect(cacheHitPercent({ output: 12 } as never)).toBeNull()
++  })
++
++  it('reports a full hit as 100', () => {
++    expect(cacheHitPercent({ cacheRead: 64 })).toBe('100')
++    expect(cacheHitPercent({ input: 0, cacheRead: 64, cacheWrite: 0 })).toBe('100')
++  })
++
++  it('keeps an almost-full hit below 100', () => {
++    expect(cacheHitPercent({ cacheRead: 999, input: 1 })).toBe('99.9')
++    expect(cacheHitPercent({ cacheRead: 1_999, input: 1 })).toBe('99.9')
++  })
++
++  it('trims a whole percentage and keeps one decimal otherwise', () => {
++    expect(cacheHitPercent({ cacheRead: 1, input: 1 })).toBe('50')
++    expect(cacheHitPercent({ cacheRead: 1, input: 2 })).toBe('33.3')
++  })
++
++  it('counts cache writes as prompt input', () => {
++    expect(cacheHitPercent({ cacheRead: 20, cacheWrite: 20 })).toBe('50')
++  })
++})
+diff --git a/packages/client/ui-trajectory/tsconfig.json b/packages/client/ui-trajectory/tsconfig.json
+index 744091c3..832d8752 100644
+--- a/packages/client/ui-trajectory/tsconfig.json
++++ b/packages/client/ui-trajectory/tsconfig.json
+@@ -50,6 +50,9 @@
+     {
+       "path": "../../llm/llm"
+     },
++    {
++      "path": "../../llm/token-meter"
++    },
+     {
+       "path": "../../attachment/attachment"
+     }
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 5f38bae3..c1b08ef6 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -6326,6 +6326,9 @@ importers:
+       '@deepseek-ai/dsh-session':
+         specifier: workspace:*
+         version: link:../../core/session
++      '@deepseek-ai/dsh-token-meter':
++        specifier: workspace:*
++        version: link:../../llm/token-meter
+       '@deepseek-ai/dsh-tools':
+         specifier: workspace:*
+         version: link:../../core/tools

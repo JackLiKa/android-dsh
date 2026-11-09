@@ -12,7 +12,7 @@ flowchart TD
     C --> W["DshWebClient<br/>HTTP RPC + mux WebSocket"]
     W --> E["dsh Web engine<br/>127.0.0.1:3080"]
     E --> S["Session / Agent / Tools / Approvals"]
-    E --> P["Profile web + optional bridge patch"]
+    E --> P["Profile web + unavailable-tools patch + optional bridge patch"]
     P --> M["MCP client -> mcp-server.mjs"]
     M --> B["Device bridge broker<br/>127.0.0.1 ephemeral"]
     B --> A["Accessibility service"]
@@ -26,13 +26,16 @@ flowchart TD
 
 `DshEngineService` 是 `startForeground` 服务，负责：
 
-1. 校验内置 payload 的 SHA-256，解压到 `filesDir/dsh-runtime/runtime-<sha>/`，确保 Node 可执行。
+1. 校验内置 payload 的 SHA-256，解压到 `filesDir/dsh-runtime/runtime-<sha>/`，确保 Node 可执行；目录已存在时只做发布校验，不重复解压。系统 CA 证书包按证书文件名/大小/修改时间生成签名，签名未变时复用 `system-ca.pem`。
 2. 需要时把 `assets/dsh-bridge/mcp-server.mjs` 复制到私有目录，启动设备桥 broker，写入 `android-bridge.cordis.yml`。
-3. 以 `node --expose-internals bin.js --profile web [--patch <abs>] --no-open` 启动引擎，工作目录与 home 均位于应用私有目录。
-4. 从 stdout 解析 `http://127.0.0.1:3080/?token=…`，用带 token 的 `GET /` 建立登录 Cookie；未认证 `GET /` 返回 200/401 即视为就绪。
-5. 把 stdout/stderr、退出码、崩溃归因写入 `EngineLogStore`（JSONL，token 脱敏）。
+3. 每次启动都写入 `adsh-unavailable-tools.yml`，禁用依赖官方 App 本地 3181/3081 服务的 `tool-accessibility`、`tool-vscreen`、`tool-android`、`tool-shizuku`；否则这些工具会固定误报“屏幕助手不可用”，把模型引向不可用的路径。
+4. 以 `node --expose-internals bin.js --profile web [--patch <abs>]... --no-open` 启动引擎，工作目录与 home 均位于应用私有目录。
+5. 从 stdout 解析 `http://127.0.0.1:3080/?token=…`，用带 token 的 `GET /` 建立登录 Cookie；未认证 `GET /` 返回 200/401 即视为就绪。
+6. 把 stdout/stderr、退出码、崩溃归因写入 `EngineLogStore`（JSONL，token 脱敏）。
 
-安全模式使用 `--profile rescue --from-default-profile web`，从随附 Web 模板重建干净配置，并同样附加设备桥 patch（若启用）。
+应用绑定服务后，若引擎处于 `IDLE`/`STOPPED` 且未手动停止、未关闭自动启动，`MainActivity` 会发送 `ACTION_START` 恢复引擎；手动停止写入持久标记，下一次显式启动时清除。设置页提供“打开应用时自动启动引擎”开关。
+
+安全模式使用 `--profile rescue --from-default-profile web`，从随附 Web 模板重建干净配置，并同样附加不可用工具与设备桥 patch（若启用）。
 
 `targetSdk` 固定为 28，原因是随附 Node ELF 需要在应用私有目录获得可执行权限；升级平台目标前必须重新验证运行时。
 
@@ -77,12 +80,13 @@ UI 层只消费 `DshChatState`，不直接解析引擎帧。
 4. broker 路由：`/device`、`/notifications`、`/ui`、`POST /ui/tap|swipe|text`、`POST /app/open`、`/apps`、`POST /actions/alarm|timer|sms|sms/send|dial|speak|speak/stop`。
 5. 无障碍服务提供界面树、点击、滑动与文本输入；通知监听服务提供通知列表。
 6. 自动化动作：闹钟与计时器通过系统公开 Intent 直接创建；`compose_sms` 与拨号只打开系统应用并预填；`send_sms` 经 `SmsManager` 直接发送，需要单独授予“短信发送”运行时权限，且只在用户明确要求发送时调用。`send_sms` 为每个分片注册一次性 `SMS_SENT` 广播并等待最多 15 秒（从调用开始计时，包含系统确认耗时），把 `RESULT_OK` 或运营商错误码汇总成“发送成功/失败/未收到完整回执”。一加/ColorOS 会在系统层再弹一次发送确认（约 8 秒倒计时），由用户在手机上点“发送”，应用不自动点击或绕过该确认；朗读复用 `ReplySpeaker`。
-7. `DeviceCapabilities` 保留最近 30 条审计，设置页展示最近 6 条。
-8. 关闭开关会删除 patch、停止 broker、重启引擎；引擎未运行时仅保存设置。
+7. 所有副作用路由在调用 `DeviceCapabilities` 前统一经过 `DeviceGovernor.authorize`：`DevicePolicy` 按“拒绝 > 询问 > 允许”合成预设与用户规则；只读模式、敏感应用与凭据输入优先拦截。标签匹配同时覆盖简体与繁体（如“发送/發送/傳送”“删除/刪除”），避免繁体 ROM 把危险点击降级为普通 TAP。`ASK` 阻塞 worker 最多 60 秒，只能由应用内弹窗、通知动作或“始终允许”规则完成，超时按拒绝处理。若在应用内弹窗中允许，原本的目标应用会被审批界面挤出前台，因此点击路由在执行前会把发起请求的应用重新调到前台并等待最多 15 秒（ColorOS 会先弹“想要開啟 X”确认），再重新解析节点点击。决策追加到 `files/device-audit.jsonl`；`DeviceCapabilities` 仍保留最近 30 条调用供设置页即时排查。
+8. 审批通知走 `adsh-approvals` 渠道，Android 13+ 需要 `POST_NOTIFICATIONS`；设置页提供预设、只读/敏感应用/凭据开关、规则列表与安全决策记录。MCP 客户端单次调用超时 90 秒，覆盖 60 秒审批与 15 秒短信回执。
+9. 关闭开关会删除 patch、停止 broker、重启引擎；引擎未运行时仅保存设置。
 
 MCP 子进程环境会清除凭据型变量与 `DSH_*`，设备桥 token 只通过配置的 `config.env` 注入，因此不会出现在父进程环境或引擎日志中。
 
-真机上已逐一调用原有 7 个工具：`device_info`、`notifications_list`、`screen_snapshot`、`screen_tap`、`screen_swipe`、`screen_input`、`app_open`；新增的 `list_apps`、`set_alarm`、`set_timer`、`compose_sms`、`send_sms`、`dial_number`、`speak_text`、`stop_speaking` 已完成 MCP `tools/list` 与 broker 端点冒烟；`send_sms` 在模拟器上真实写入系统已发送库，模拟器与真机均通过 `SMS_SENT` 广播返回“发送成功”。重装 APK 后系统可能清空无障碍/通知授权，需要重新开启；运行时的 `android_a11y_status` 可能滞后，以本应用设置页和实际桥调用为准。桥的坐标系为应用内容区高度（真机 1240×2479），不是含系统栏的物理高度。
+真机上已逐一调用原有 7 个工具：`device_info`、`notifications_list`、`screen_snapshot`、`screen_tap`、`screen_swipe`、`screen_input`、`app_open`；新增的 `list_apps`、`set_alarm`、`set_timer`、`compose_sms`、`send_sms`、`get_weather`、`dial_number`、`speak_text`、`stop_speaking` 已完成 MCP `tools/list` 与 broker 端点冒烟；`send_sms` 在模拟器上真实写入系统已发送库，模拟器与真机均通过 `SMS_SENT` 广播返回“发送成功”。设备桥目前共 21 个工具，另含 `screen_ocr`（离线中文 OCR）、`screen_long_press`、`clipboard_set`、`share_text` 与 `compose_mail`，用于无障碍节点被屏蔽的应用与文本输入。重装 APK 后系统可能清空无障碍/通知授权，需要重新开启；引擎自带的 `android_*` 工具依赖官方 App 的本地服务，已在启动时禁用，统一使用设备桥。桥的坐标系为应用内容区高度（真机 1240×2479），不是含系统栏的物理高度。
 
 ## 语音、唤醒与自动化
 

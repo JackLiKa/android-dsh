@@ -33,6 +33,8 @@ class SecureSettings(private val context: Context) {
     private val speechItnKey = stringPreferencesKey("speech_itn")
     private val speechSecondPassKey = stringPreferencesKey("speech_second_pass")
     private val fastThinkingKey = stringPreferencesKey("fast_thinking")
+    private val engineAutoStartKey = stringPreferencesKey("engine_auto_start")
+    private val engineManualStopKey = stringPreferencesKey("engine_manual_stop")
 
     private fun key(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -136,6 +138,22 @@ class SecureSettings(private val context: Context) {
 
     suspend fun setFastThinking(value: Boolean) {
         context.dataStore.edit { it[fastThinkingKey] = value.toString() }
+    }
+
+    /** Start the engine when the app opens, unless the user stopped it explicitly. */
+    suspend fun engineAutoStart(): Boolean =
+        context.dataStore.data.first()[engineAutoStartKey] != "false"
+
+    suspend fun setEngineAutoStart(value: Boolean) {
+        context.dataStore.edit { it[engineAutoStartKey] = value.toString() }
+    }
+
+    /** A manual stop disables auto-start until the user starts the engine again. */
+    suspend fun engineManuallyStopped(): Boolean =
+        context.dataStore.data.first()[engineManualStopKey] == "true"
+
+    suspend fun setEngineManuallyStopped(value: Boolean) {
+        context.dataStore.edit { it[engineManualStopKey] = value.toString() }
     }
 
     suspend fun saveRemoteEngineUrl(value: String?) {

@@ -68,6 +68,9 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("org.yaml:snakeyaml:2.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Bundled offline Chinese OCR (Apache-2.0). Used only when an app hides its
+    // accessibility tree, e.g. WeChat and Douyin.
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
     // Offline Chinese speech recognition (Apache-2.0). Model lives in assets/vosk/model-cn.
     implementation("com.alphacephei:vosk-android:0.3.47")
     // Streaming Zipformer + Silero VAD + CT-Transformer punctuation (Apache-2.0). The AAR is

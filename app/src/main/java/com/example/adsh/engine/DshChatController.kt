@@ -51,6 +51,7 @@ class DshChatController(
     private val apiKeyProvider: suspend () -> String?,
     private val persistSession: suspend (String?) -> Unit,
     private val fastModeProvider: () -> Boolean = { false },
+    private val traceStore: TraceLogStore? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -62,6 +63,9 @@ class DshChatController(
 
     private val _catalog = MutableStateFlow<DshModelCatalog?>(null)
     val catalog: StateFlow<DshModelCatalog?> = _catalog.asStateFlow()
+
+    private val _trace = MutableStateFlow(TraceSnapshot())
+    val trace: StateFlow<TraceSnapshot> = _trace.asStateFlow()
 
     private var client: DshWebClient? = null
     private var clientUrl: String? = null
@@ -75,6 +79,8 @@ class DshChatController(
     private fun sessionCwd(): String? = if (remoteMode) null else cwdProvider()
 
     private val events = ArrayList<Map<String, Any?>>()
+    private val persistedTurns = HashSet<String>()
+    private var storeKeysLoaded = false
     private var streaming: DshStreaming? = null
     private var optimistic: String? = null
     private var running = false
@@ -167,6 +173,8 @@ class DshChatController(
         client = null
         clientUrl = null
         events.clear()
+        resetPersistedTurns()
+        _trace.value = TraceSnapshot()
         approvals.clear()
         questions.clear()
         streaming = null
@@ -209,6 +217,8 @@ class DshChatController(
         followJob?.cancel()
         streamClear?.cancel()
         events.clear()
+        resetPersistedTurns()
+        _trace.value = TraceSnapshot()
         streaming = null
         optimistic = null
         running = false
@@ -247,6 +257,8 @@ class DshChatController(
         followJob = null
         streamClear?.cancel()
         events.clear()
+        resetPersistedTurns()
+        _trace.value = TraceSnapshot()
         streaming = null
         optimistic = null
         running = false
@@ -431,6 +443,9 @@ class DshChatController(
         _state.update { it.copy(error = null) }
     }
 
+    /** Persisted per-turn trace records, newest last. */
+    fun readStoredTrace(): List<String> = traceStore?.read().orEmpty()
+
     fun refreshCatalog() {
         val c = client ?: return
         scope.launch { refreshCatalog(c) }
@@ -515,6 +530,8 @@ class DshChatController(
         currentSession = null
         followJob = null
         events.clear()
+        resetPersistedTurns()
+        _trace.value = TraceSnapshot()
         streaming = null
         optimistic = null
         running = false
@@ -585,16 +602,22 @@ class DshChatController(
                         error = null,
                     )
                 }
+                refreshTrace()
                 publishAll()
             }
             "event" -> {
                 val event = item["event"].asDshMap() ?: return
                 events += event
-                when (event["type"].dshString()) {
-                    "turn/start" -> running = true
+                val eventType = event["type"].dshString()
+                when (eventType) {
+                    "turn/start" -> {
+                        running = true
+                        refreshTrace()
+                    }
                     "turn/end" -> {
                         running = false
                         clearStreaming()
+                        refreshTrace(event["data"].asDshMapOrEmpty()["turn"].dshInt())
                         client?.let { refreshSessions(it) }
                     }
                     "user/message" -> {
@@ -610,7 +633,9 @@ class DshChatController(
                         if (active != null && (active.startedAfterSeq < 0 || seq >= active.startedAfterSeq)) {
                             clearStreaming()
                         }
+                        refreshTrace()
                     }
+                    "step/start", "step/end", "tool/result", "user/message" -> refreshTrace()
                 }
                 publishAll()
             }
@@ -634,6 +659,29 @@ class DshChatController(
                     publishStream()
                 }
             }
+        }
+    }
+
+    private fun resetPersistedTurns() {
+        persistedTurns.clear()
+        storeKeysLoaded = false
+    }
+
+    private fun refreshTrace(persistTurn: Int? = null) {
+        val snapshot = TraceLog.parse(events)
+        _trace.value = snapshot
+        val store = traceStore ?: return
+        val session = currentSession
+        if (!storeKeysLoaded) {
+            storeKeysLoaded = true
+            persistedTurns.addAll(store.keys())
+        }
+        val pending = snapshot.turns
+            .filter { it.status != "进行中" }
+            .filter { persistedTurns.add("${session.orEmpty()}#${it.turn}") }
+        if (pending.isEmpty()) return
+        scope.launch(Dispatchers.IO) {
+            pending.forEach { store.append(TraceLog.turnRecord(session, it)) }
         }
     }
 

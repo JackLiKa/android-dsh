@@ -46,6 +46,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Share
@@ -135,6 +136,7 @@ fun ChatScreen(
     onRejectQuestion: (DshQuestionRequest) -> Unit,
     onDismissError: () -> Unit,
     onOpenLogs: () -> Unit = {},
+    onOpenTrace: () -> Unit = {},
 ) {
     var prompt by remember { mutableStateOf(initialPrompt) }
     var autoSent by rememberSaveable(initialPrompt) { mutableStateOf(false) }
@@ -332,6 +334,13 @@ fun ChatScreen(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                IconButton(onClick = onOpenTrace) {
+                    Icon(
+                        Icons.Default.Info,
+                        contentDescription = "轨迹",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 IconButton(
                     onClick = {
                         speakReplies = !speakReplies

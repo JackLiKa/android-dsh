@@ -3,6 +3,9 @@ package com.example.adsh.device
 import android.Manifest
 import android.accessibilityservice.GestureDescription
 import android.app.Notification
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context.CLIPBOARD_SERVICE
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -92,10 +95,205 @@ object DeviceCapabilities {
         val output = StringBuilder()
         walk(root, 0, maxNodes, counter, output)
         record("screen_snapshot", "nodes=${counter[0]}")
+        val hint = if (counter[0] == 0) {
+            "（无障碍树为空：该应用可能屏蔽了无障碍节点，请改用 screen_ocr。）"
+        } else {
+            ""
+        }
         return linkedMapOf(
             "screen" to "屏幕 ${metrics.widthPixels}x${metrics.heightPixels}，包名 ${root.packageName ?: "unknown"}，节点 ${counter[0]} 个",
-            "text" to output.toString().trimEnd(),
+            "text" to (output.toString().trimEnd() + if (hint.isEmpty()) "" else "\n$hint").trim(),
         )
+    }
+
+    /**
+     * Screenshot + offline OCR. Coordinates are screen pixels and can be fed
+     * straight into screen_tap / screen_long_press.
+     */
+    fun ocrSnapshot(context: Context, maxBlocks: Int): Map<String, Any?> {
+        val service = accessibility()
+        val packageName = foregroundPackage()
+        val bitmap = service.captureScreen()
+        try {
+            val blocks = ScreenOcr.recognize(bitmap, maxBlocks)
+            record("screen_ocr", "blocks=${blocks.size}")
+            val output = StringBuilder()
+            blocks.forEachIndexed { index, block ->
+                output.append('[').append(index).append("] ")
+                    .append(block["text"]).append(" @ (")
+                    .append(block["x"]).append(',').append(block["y"]).append(")\n")
+            }
+            if (blocks.isEmpty()) output.append("（没有识别到文字，请等待页面加载或滑动后重试）")
+            return linkedMapOf(
+                "screen" to "屏幕 ${bitmap.width}x${bitmap.height}，包名 ${packageName ?: "unknown"}，" +
+                    "OCR ${blocks.size} 块",
+                "text" to output.toString().trimEnd(),
+            )
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    fun longPress(
+        text: String?,
+        index: Int,
+        x: Double?,
+        y: Double?,
+        durationMs: Int,
+    ): String {
+        val duration = durationMs.toLong().coerceIn(500L, 3_000L)
+        if (!text.isNullOrBlank()) {
+            val service = accessibility()
+            val root = service.rootInActiveWindow
+                ?: throw BridgeFailure("没有可读取的前台窗口")
+            val exact = mutableListOf<AccessibilityNodeInfo>()
+            val partial = mutableListOf<AccessibilityNodeInfo>()
+            collect(root, text.trim(), exact, partial, 0)
+            val matches = exact.ifEmpty { partial }
+            if (matches.isEmpty()) throw BridgeFailure("没有找到文本包含“$text”的控件")
+            if (index !in matches.indices) {
+                throw BridgeFailure("匹配到 ${matches.size} 个“$text”，序号 $index 超出范围")
+            }
+            val node = matches[index]
+            var target: AccessibilityNodeInfo? = node
+            var depth = 0
+            while (target != null && !target.isLongClickable && depth < 6) {
+                target = target.parent
+                depth++
+            }
+            if (target != null && target.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)) {
+                record("screen_long_press", "text=$text")
+                return "已长按“$text”"
+            }
+            val bounds = Rect().also { node.getBoundsInScreen(it) }
+            if (bounds.width() > 0 && bounds.height() > 0) {
+                return pressGesture(
+                    bounds.centerX().toDouble(),
+                    bounds.centerY().toDouble(),
+                    duration,
+                    "text=$text",
+                )
+            }
+            throw BridgeFailure("控件“$text”不支持长按")
+        }
+        if (x == null || y == null) throw BridgeFailure("需要 text，或者同时提供 x 与 y")
+        return pressGesture(x, y, duration, "x=$x y=$y")
+    }
+
+    private fun pressGesture(x: Double, y: Double, durationMs: Long, detail: String): String {
+        val service = accessibility()
+        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+            .build()
+        if (!service.dispatchGesture(gesture, null, null)) {
+            throw BridgeFailure("长按手势发送失败")
+        }
+        record("screen_long_press", detail)
+        return "已长按坐标 (${x.toInt()}, ${y.toInt()}) ${durationMs}ms"
+    }
+
+    fun setClipboard(context: Context, text: String): String {
+        if (text.isEmpty()) throw BridgeFailure("需要 text")
+        val manager = context.getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager
+            ?: throw BridgeFailure("系统剪贴板不可用")
+        val adshPackage = context.packageName
+        val original = foregroundPackage()
+        // ColorOS ignores clipboard writes from a background package, and the
+        // input method then offers stale clipboard history. Briefly bring adsh
+        // forward, write, and restore the previous app.
+        val raised = original != null && original != adshPackage && raiseApp(context, adshPackage)
+        if (raised) Thread.sleep(250)
+        manager.setPrimaryClip(ClipData.newPlainText("adsh", text))
+        val verified = runCatching {
+            manager.primaryClip?.getItemAt(0)?.text?.toString() == text
+        }.getOrDefault(false)
+        if (raised && original != null) raiseApp(context, original)
+        record("clipboard_set", "chars=${text.length} verified=$verified")
+        return if (verified) {
+            "已写入 ${text.length} 个字符到系统剪贴板；长按输入框后点击“粘贴”即可填入"
+        } else {
+            "已请求写入 ${text.length} 个字符，但系统未确认（可能限制了后台剪贴板）；" +
+                "请先让 adsh 回到前台再试，或改用 share_text"
+        }
+    }
+
+    /** OCR-locates the Nth block containing [target] and returns its screen center. */
+    fun ocrFind(target: String, index: Int): Pair<Double, Double>? {
+        val wanted = target.trim()
+        if (wanted.isEmpty()) return null
+        val bitmap = accessibility().captureScreen()
+        val blocks = try {
+            ScreenOcr.recognize(bitmap, 300)
+        } finally {
+            bitmap.recycle()
+        }
+        val synonyms = when (wanted) {
+            "发送", "發送", "傳送", "传送" -> listOf("发送", "發送", "傳送", "传送", "Send", "send")
+            "粘贴", "貼上" -> listOf("粘贴", "貼上", "Paste", "paste")
+            "发表", "發布", "发布", "發佈" -> listOf("发表", "發表", "發布", "发布", "發佈", "Post", "post")
+            else -> listOf(wanted)
+        }
+        val exact = blocks.filter { block ->
+            synonyms.any { it == block["text"].toString().trim() }
+        }
+        val partial = blocks.filter { block ->
+            synonyms.any { block["text"].toString().contains(it) }
+        }
+        val hit = exact.ifEmpty { partial }.getOrNull(index) ?: return null
+        val x = (hit["x"] as? Number)?.toDouble() ?: return null
+        val y = (hit["y"] as? Number)?.toDouble() ?: return null
+        record("screen_ocr", "locate=$wanted")
+        return x to y
+    }
+
+    fun shareText(
+        context: Context,
+        packageName: String?,
+        text: String,
+        subject: String?,
+    ): String {
+        if (text.isBlank()) throw BridgeFailure("需要 text")
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+            subject?.takeIf { it.isNotBlank() }?.let { putExtra(Intent.EXTRA_SUBJECT, it) }
+            packageName?.takeIf { it.isNotBlank() }?.let { setPackage(it) }
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val intent = if (packageName.isNullOrBlank()) {
+            Intent.createChooser(send, "分享到").apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        } else {
+            send
+        }
+        if (intent.resolveActivity(context.packageManager) == null) {
+            throw BridgeFailure("${packageName ?: "系统"}没有可用的分享入口")
+        }
+        context.startActivity(intent)
+        record("share_text", "${packageName ?: "chooser"} chars=${text.length}")
+        return "已打开分享面板，文本已预填；还需要选择联系人并点击发送"
+    }
+
+    fun composeMail(
+        context: Context,
+        packageName: String?,
+        to: String,
+        subject: String?,
+        body: String,
+    ): String {
+        if (to.isBlank()) throw BridgeFailure("需要收件人 to")
+        val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${Uri.encode(to)}")).apply {
+            subject?.takeIf { it.isNotBlank() }?.let { putExtra(Intent.EXTRA_SUBJECT, it) }
+            body.takeIf { it.isNotBlank() }?.let { putExtra(Intent.EXTRA_TEXT, it) }
+            packageName?.takeIf { it.isNotBlank() }?.let { setPackage(it) }
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        if (intent.resolveActivity(context.packageManager) == null) {
+            throw BridgeFailure("${packageName ?: "系统"}没有可处理 mailto 的邮件应用")
+        }
+        context.startActivity(intent)
+        record("compose_mail", "${packageName ?: "default"} subject=${subject?.length ?: 0} body=${body.length}")
+        return "已打开邮件撰写页：收件人、主题和正文已预填，仍需点击发送"
     }
 
     fun tap(text: String?, index: Int, x: Double?, y: Double?): String {
@@ -107,7 +305,11 @@ object DeviceCapabilities {
             val partial = mutableListOf<AccessibilityNodeInfo>()
             collect(root, text.trim(), exact, partial, 0)
             val matches = exact.ifEmpty { partial }
-            if (matches.isEmpty()) throw BridgeFailure("没有找到文本包含“$text”的控件")
+            if (matches.isEmpty()) {
+                throw BridgeFailure(
+                    "没有找到文本包含“$text”的控件；若该应用屏蔽了无障碍树，请改用 screen_ocr 后按坐标点击",
+                )
+            }
             if (index !in matches.indices) {
                 throw BridgeFailure("匹配到 ${matches.size} 个“$text”，序号 $index 超出范围")
             }
@@ -158,7 +360,12 @@ object DeviceCapabilities {
         val root = service.rootInActiveWindow ?: throw BridgeFailure("没有可读取的前台窗口")
         val candidates = mutableListOf<AccessibilityNodeInfo>()
         collectEditable(root, candidates, 0)
-        if (candidates.isEmpty()) throw BridgeFailure("当前窗口没有可编辑的输入框")
+        if (candidates.isEmpty()) {
+            throw BridgeFailure(
+                "当前窗口没有可编辑的输入框（该应用可能屏蔽了无障碍树）；" +
+                    "请改用 clipboard_set 写入文本，再 screen_long_press 长按输入框并点击“粘贴”",
+            )
+        }
         val target = when {
             !selector.isNullOrBlank() -> candidates.firstOrNull { node ->
                 listOfNotNull(node.text, node.contentDescription, node.hintText)
@@ -177,8 +384,19 @@ object DeviceCapabilities {
     }
 
     fun openApp(context: Context, packageName: String?, appName: String?): String {
+        val resolved = resolveAppPackage(context, packageName, appName)
         val manager = context.packageManager
-        val resolved = packageName?.trim()?.takeIf { it.isNotEmpty() } ?: run {
+        val launch = manager.getLaunchIntentForPackage(resolved)
+            ?: throw BridgeFailure("无法启动 $resolved：应用没有启动入口或未安装")
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(launch)
+        record("app_open", resolved)
+        return "已打开 $resolved"
+    }
+
+    fun resolveAppPackage(context: Context, packageName: String?, appName: String?): String {
+        val manager = context.packageManager
+        return packageName?.trim()?.takeIf { it.isNotEmpty() } ?: run {
             val query = appName?.trim().orEmpty()
             if (query.isEmpty()) throw BridgeFailure("需要 package 或 name")
             val activities = manager.queryIntentActivities(
@@ -191,13 +409,55 @@ object DeviceCapabilities {
             } ?: throw BridgeFailure("没有找到名称包含“$query”的应用")
             match.activityInfo.packageName
         }
-        val launch = manager.getLaunchIntentForPackage(resolved)
-            ?: throw BridgeFailure("无法启动 $resolved：应用没有启动入口或未安装")
-        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(launch)
-        record("app_open", resolved)
-        return "已打开 $resolved"
     }
+
+    /** Package of the window the accessibility service can currently see. */
+    fun foregroundPackage(): String? = runCatching {
+        AdshAccessibilityService.instance()?.rootInActiveWindow?.packageName?.toString()
+    }.getOrNull()
+
+    /**
+     * The approval dialog brings this app to the foreground, so a tap approved
+     * by the user would otherwise land on the wrong window. Re-raise the app
+     * that was in front when the request was made and wait for it.
+     */
+    fun raiseApp(context: Context, packageName: String): Boolean {
+        if (foregroundPackage() == packageName) return true
+        val launch = context.packageManager.getLaunchIntentForPackage(packageName) ?: return false
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        runCatching { context.startActivity(launch) }
+        repeat(150) {
+            Thread.sleep(100)
+            if (foregroundPackage() == packageName) return true
+        }
+        return false
+    }
+
+    /**
+     * Mirrors the target selection in [inputText] to tell the policy whether
+     * the field is a password or one-time-code input before any text is set.
+     */
+    fun inputFieldIsCredential(selector: String?): Boolean = runCatching {
+        val service = AdshAccessibilityService.instance() ?: return false
+        val root = service.rootInActiveWindow ?: return false
+        val candidates = mutableListOf<AccessibilityNodeInfo>()
+        collectEditable(root, candidates, 0)
+        if (candidates.isEmpty()) return false
+        val target = when {
+            !selector.isNullOrBlank() -> candidates.firstOrNull { node ->
+                listOfNotNull(node.text, node.contentDescription, node.hintText)
+                    .any { it.toString().contains(selector, ignoreCase = true) }
+            } ?: return false
+            else -> candidates.firstOrNull { it.isFocused } ?: candidates.first()
+        }
+        val hint = listOfNotNull(target.hintText, target.contentDescription, target.text)
+            .joinToString(" ")
+        DevicePolicy.isCredentialField(
+            hint = hint,
+            isPassword = target.isPassword,
+            text = target.text?.toString().orEmpty(),
+        )
+    }.getOrDefault(false)
 
     fun setAlarm(context: Context, hour: Int?, minute: Int?, label: String?): String {
         if (hour == null || hour !in 0..23) throw BridgeFailure("需要 0-23 的 hour")

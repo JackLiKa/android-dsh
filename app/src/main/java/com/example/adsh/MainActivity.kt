@@ -87,10 +87,13 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.lifecycleScope
 import com.example.adsh.device.AdshAccessibilityService
 import com.example.adsh.device.AdshNotificationListenerService
 import com.example.adsh.device.DeviceCapabilities
+import com.example.adsh.device.DeviceGovernor
 import com.example.adsh.engine.DshChatController
+import com.example.adsh.engine.EngineStartPolicy
 import com.example.adsh.ui.AccentColor
 import com.example.adsh.ui.AdshTheme
 import com.example.adsh.ui.ThemeMode
@@ -137,6 +140,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        DeviceGovernor.attach(applicationContext)
         val settings = SecureSettings(applicationContext)
         val workspaceStore = WorkspaceStore(filesDir.resolve("dsh-home/workspaces"))
         val task = if (savedInstanceState == null) intent.getStringExtra("task").orEmpty() else ""
@@ -165,12 +169,14 @@ class MainActivity : ComponentActivity() {
                     voiceRequest.value,
                     engineBinder.value,
                     {
+                        lifecycleScope.launch { settings.setEngineManuallyStopped(false) }
                         startForegroundService(
                             Intent(this, DshEngineService::class.java)
                                 .setAction(DshEngineService.ACTION_START)
                         )
                     },
                     {
+                        lifecycleScope.launch { settings.setEngineManuallyStopped(false) }
                         startForegroundService(
                             Intent(this, DshEngineService::class.java)
                                 .setAction(DshEngineService.ACTION_SAFE_START)
@@ -289,6 +295,7 @@ private fun App(
     var speechSecondPass by remember { mutableStateOf(true) }
     var fastThinking by remember { mutableStateOf(true) }
     var homeWake by remember { mutableStateOf(true) }
+    var autoStartEngine by remember { mutableStateOf(true) }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -312,9 +319,13 @@ private fun App(
     val catalog = remember(context) { ProfileCatalog(context) }
     val automationStore = remember(context) { AutomationStore(context) }
     val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val connectingMessage = stringResource(R.string.engine_connecting)
     val engineStatus = binder?.status?.collectAsState()?.value
-        ?: EngineStatus(EngineStatus.Phase.IDLE, "引擎尚未连接")
+        ?: EngineStatus(EngineStatus.Phase.IDLE, connectingMessage)
 
+    val traceStore = remember(context) {
+        com.example.adsh.engine.TraceLogStore(java.io.File(context.filesDir, "logs/trace.jsonl"))
+    }
     val controller = remember {
         DshChatController(
             cwdProvider = { workspacePath },
@@ -324,12 +335,14 @@ private fun App(
                 else settings.setSessionId(sessionId)
             },
             fastModeProvider = { fastThinking },
+            traceStore = traceStore,
         )
     }
     DisposableEffect(controller) {
         onDispose { controller.close() }
     }
     val chatState by controller.state.collectAsState()
+    val traceSnapshot by controller.trace.collectAsState()
     val modelCatalog by controller.catalog.collectAsState()
     val engineSessions by controller.sessions.collectAsState()
     LaunchedEffect(chatState.sessionId, remoteUrl) {
@@ -337,6 +350,23 @@ private fun App(
     }
     LaunchedEffect(binder, chatState.running) {
         binder?.setBusy(chatState.running)
+    }
+    var autoStartHandled by remember(binder) { mutableStateOf(false) }
+    LaunchedEffect(binder, engineStatus.phase, settingsLoaded, remoteUrl, autoStartEngine) {
+        if (binder == null || !settingsLoaded || remoteUrl.isNotBlank() || autoStartHandled) {
+            return@LaunchedEffect
+        }
+        if (
+            !EngineStartPolicy.shouldAutoStart(
+                engineStatus.phase,
+                autoStartEngine,
+                settings.engineManuallyStopped(),
+            )
+        ) {
+            return@LaunchedEffect
+        }
+        autoStartHandled = true
+        startEngine()
     }
     val lifecycleOwner = context as? LifecycleOwner
     DisposableEffect(binder, lifecycleOwner, controller) {
@@ -368,6 +398,7 @@ private fun App(
 
     BackHandler(enabled = page == "Native") { page = "Plugins" }
     BackHandler(enabled = page == "Logs") { page = "Settings" }
+    BackHandler(enabled = page == "Trace") { page = "Chat" }
 
     LaunchedEffect(voiceRequest) {
         if (voiceRequest > 0) page = "Chat"
@@ -397,6 +428,7 @@ private fun App(
             speechSecondPass = settings.speechSecondPass()
             fastThinking = settings.fastThinking()
             homeWake = AdshAccessibilityService.isHomeWakeEnabled(context)
+            autoStartEngine = settings.engineAutoStart()
             settingsLoaded = true
             workspaceReady = true
         } catch (error: Exception) {
@@ -427,6 +459,7 @@ private fun App(
             PackageManager.PERMISSION_GRANTED
         bubbleOn = AdshAccessibilityService.isBubbleEnabled(context)
         bridgePort = binder?.bridgePort()
+        autoStartEngine = settings.engineAutoStart()
     }
 
     LaunchedEffect(profile) {
@@ -446,6 +479,10 @@ private fun App(
     val newSession: () -> Unit = {
         controller.newSession()
         page = "Chat"
+    }
+    val stopEngine: () -> Unit = {
+        binder?.stop()
+        scope.launch { settings.setEngineManuallyStopped(true) }
     }
     val selectWorkspace: (WorkspaceRef) -> Unit = { workspace ->
         if (workspace.id != selectedWorkspaceId) {
@@ -467,7 +504,7 @@ private fun App(
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
-            Surface(Modifier.statusBarsPadding(), tonalElevation = 3.dp) {
+            if (page != "Trace") Surface(Modifier.statusBarsPadding(), tonalElevation = 3.dp) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
                     if (page == "Native") {
                         TextButton(onClick = { page = "Plugins" }) {
@@ -552,6 +589,7 @@ private fun App(
         },
     ) { insets ->
         Column(Modifier.fillMaxSize().padding(insets).imePadding()) {
+            DeviceApprovalDialog()
             when (page) {
                 "Chat" -> ChatScreen(
                     state = chatState,
@@ -578,6 +616,17 @@ private fun App(
                     onRejectQuestion = controller::rejectQuestions,
                     onDismissError = controller::clearError,
                     onOpenLogs = { page = "Logs" },
+                    onOpenTrace = { page = "Trace" },
+                )
+
+                "Trace" -> TraceScreen(
+                    trace = traceSnapshot,
+                    sessionTitle = chatState.title,
+                    sessionId = chatState.sessionId,
+                    running = chatState.running,
+                    logPath = "logs/trace.jsonl",
+                    onBack = { page = "Chat" },
+                    onReload = { controller.readStoredTrace() },
                 )
 
                 "History" -> EngineHistoryScreen(
@@ -803,6 +852,29 @@ private fun App(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            stringResource(R.string.engine_auto_start),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                        )
+                                        Text(
+                                            stringResource(R.string.engine_auto_start_hint),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    Switch(
+                                        checked = autoStartEngine,
+                                        onCheckedChange = { value ->
+                                            autoStartEngine = value
+                                            scope.launch { settings.setEngineAutoStart(value) }
+                                        },
+                                    )
+                                }
                                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                     TextButton(
                                         onClick = { controller.refreshCatalog() },
@@ -816,7 +888,7 @@ private fun App(
                                             engineStatus.phase != EngineStatus.Phase.DEGRADED,
                                     ) { Text(stringResource(R.string.engine_start)) }
                                     TextButton(
-                                        onClick = { binder?.stop() },
+                                        onClick = stopEngine,
                                         enabled = engineStatus.phase == EngineStatus.Phase.READY ||
                                             engineStatus.phase == EngineStatus.Phase.DEGRADED ||
                                             engineStatus.phase == EngineStatus.Phase.STARTING,
@@ -1160,6 +1232,7 @@ private fun App(
                                 }
                             }
                         }
+                        DevicePolicyCard(Modifier.fillMaxWidth())
                         Spacer(Modifier.height(12.dp))
                         Card(Modifier.fillMaxWidth()) {
                             Column(

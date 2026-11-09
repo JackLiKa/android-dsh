@@ -29,6 +29,11 @@ const INSTRUCTIONS = [
   '通知可能包含隐私信息，只在用户要求时读取。',
   '不要执行不可逆或影响他人的操作（支付、删除、发消息、拨号等），除非用户在当前对话中明确要求或确认。',
   '自动化动作（闹钟、计时器、短信预填、拨号）会打开对应的系统应用并交由用户确认；send_sms 仅在用户明确要求发送短信时直接发送并等待发送回执，compose_sms 只预填不发送。部分系统会在 send_sms 时再弹一次发送确认，需要在手机上点“发送”，否则系统会取消该次发送。',
+  '每次调用前，运行 dsh 的手机会用本地安全策略检查；支付、发短信、拨号、安装和部分点击会被要求由用户在手机上确认。此时调用会暂停最多 60 秒等待用户决定：不要重复调用、不要改用其他工具绕过，把“等待用户确认/用户拒绝”如实告诉用户。',
+  '无障碍树被屏蔽的应用（微信 com.tencent.mm、抖音 com.ss.android.ugc.aweme 常见）里，screen_snapshot 只返回 0×0 根节点；此时改用 screen_ocr 获取“文字 @ (x,y)”，再用 screen_tap 传 x/y 点击。坐标点击时用 label 说明目标（如“发送”“粘贴”“发表”），安全策略会据此分类。',
+  '这些应用通常无法用 screen_input 写入：先 clipboard_set 写入文本，再 screen_long_press 长按输入框坐标，screen_ocr 找到“粘贴”并点击；然后 OCR 找“发送”或点击输入框右侧发送按钮。也可用 share_text 直接把文本交给微信/QQ/Telegram 的分享面板。',
+  '常用包名：Gmail com.google.android.gm，QQ邮箱 com.tencent.androidqqmail，QQ com.tencent.mobileqq，微信 com.tencent.mm，Telegram org.telegram.messenger，抖音 com.ss.android.ugc.aweme。邮件优先用 compose_mail 预填。',
+  '发送消息、发表朋友圈/QQ空间、发布抖音视频都属于对外发布：点击发送/发表前必须让用户在手机审批弹窗确认，不要寻找绕过方式。',
   '意图明确时直接调用工具：闹钟 set_alarm、计时器 set_timer、天气 get_weather、打开应用 app_open、短信 send_sms（仅明确要求发送时）。不要先解释计划或反复确认，一次工具调用能完成就只调用一次。',
   '简单问题（天气、时间、设备状态、单步操作）只给简短结论，推理链保持最短；缺少城市、联系人等关键信息时只问一个问题。',
 ].join('\n')
@@ -75,10 +80,90 @@ const TOOLS = [
       type: 'object',
       properties: {
         text: { type: 'string', description: '要点击的控件文本或内容描述。' },
+        label: { type: 'string', description: '坐标点击时目标控件的文字或意图，如“发送”“粘贴”“发表”，用于安全分类；需要审批的坐标点击必须提供，审批后会按它重新 OCR 定位。' },
         index: { type: 'integer', minimum: 0, description: '同文本匹配项中的序号，默认 0。' },
         x: { type: 'number', description: '屏幕 X 坐标（像素）。' },
         y: { type: 'number', description: '屏幕 Y 坐标（像素）。' },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'screen_ocr',
+    title: '截屏识别文字',
+    description:
+      '截取当前屏幕并用设备内置的离线 OCR 识别文字，返回“文字 @ (x,y)”列表，坐标可直接用于 screen_tap。适用于无障碍树被屏蔽的微信、抖音等应用。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        maxBlocks: { type: 'integer', minimum: 20, maximum: 300, description: '最多返回多少块文字，默认 120。' },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'screen_long_press',
+    title: '长按屏幕',
+    description:
+      '长按控件或屏幕坐标，durationMs 默认 800。用于呼出输入框的粘贴菜单，或长按微信朋友圈的相机入口。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '要长按的控件文本或内容描述。' },
+        label: { type: 'string', description: '坐标长按时的目标说明，用于安全分类。' },
+        index: { type: 'integer', minimum: 0, description: '同文本匹配项中的序号，默认 0。' },
+        x: { type: 'number', description: '屏幕 X 坐标（像素）。' },
+        y: { type: 'number', description: '屏幕 Y 坐标（像素）。' },
+        durationMs: { type: 'integer', minimum: 500, maximum: 3000, description: '按住时长，默认 800 毫秒。' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'clipboard_set',
+    title: '写入剪贴板',
+    description:
+      '把文本写入系统剪贴板。为绕过 ColorOS 的后台剪贴板限制，会短暂把 adsh 切到前台再切回原应用。配合 screen_long_press 和“粘贴”菜单，可向屏蔽无障碍输入框的应用（如微信）填入文字。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '要写入剪贴板的文本。' },
+      },
+      required: ['text'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'share_text',
+    title: '分享文本',
+    description:
+      '用系统分享面板或指定应用分享一段文本，会打开该应用的分享界面并预填内容，不会自动发送；之后需选择联系人和点击发送。适合微信、QQ、Telegram。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '要分享的文本。' },
+        subject: { type: 'string', description: '可选主题。' },
+        package: { type: 'string', description: '目标应用包名，如 com.tencent.mm；省略时打开系统分享面板。' },
+      },
+      required: ['text'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'compose_mail',
+    title: '预填邮件',
+    description:
+      '通过 mailto 打开指定邮箱应用并预填收件人、主题和正文，不会自动发送。QQ 邮箱用 com.tencent.androidqqmail，Gmail 用 com.google.android.gm。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: '收件人邮箱地址。' },
+        subject: { type: 'string', description: '可选主题。' },
+        body: { type: 'string', description: '可选正文。' },
+        package: { type: 'string', description: '目标邮箱应用包名。' },
+      },
+      required: ['to'],
       additionalProperties: false,
     },
   },
@@ -186,7 +271,7 @@ const TOOLS = [
     name: 'send_sms',
     title: '发送短信',
     description:
-      '直接通过系统短信服务发送短信，会真实发送且不可撤回。仅当用户在当前对话中明确要求发送，并给出收件人与正文时调用；没有明确发送指令时改用 compose_sms 预填。调用会等待最多 15 秒的发送回执（从调用开始计时，包含系统确认耗时），并返回“发送成功”或具体失败原因（含运营商错误码）。部分系统（如一加/ColorOS）会再弹一次发送确认，需在手机上点“发送”后才会发出；未确认时系统会取消该次发送。',
+      '直接通过系统短信服务发送短信，会真实发送且不可撤回。仅当用户在当前对话中明确要求发送，并给出收件人与正文时调用；没有明确发送指令时改用 compose_sms 预填。调用可能先被手机本地的安全策略暂停，等待用户在应用弹窗或通知中确认（最多 60 秒），确认后才真正发送；被拒绝或超时会返回具体原因，不要重试或绕过。发送本身会等待最多 15 秒的回执（从调用开始计时，包含系统确认耗时），并返回“发送成功”或具体失败原因（含运营商错误码）。部分系统（如一加/ColorOS）会再弹一次发送确认，需在手机上点“发送”后才会发出；未确认时系统会取消该次发送。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -345,7 +430,8 @@ async function bridge(path, body) {
   if (!BASE || !TOKEN) throw new Error('设备桥未启用：请在应用设置中开启“设备能力桥”')
   const init = {
     headers: { authorization: `Bearer ${TOKEN}` },
-    signal: AbortSignal.timeout(25000),
+    // Approval may block up to 60s, and send_sms waits up to 15s for a receipt.
+    signal: AbortSignal.timeout(90000),
   }
   if (body !== undefined) {
     init.method = 'POST'
@@ -386,10 +472,27 @@ async function callTool(name, args) {
         }
         return textResult(await bridge('/ui/tap', args))
       }
+      case 'screen_ocr': {
+        const maxBlocks = integer(args.maxBlocks, 120, 20, 300)
+        const value = await bridge(`/ui/ocr?maxBlocks=${maxBlocks}`)
+        return textResult(`${value?.screen ?? ''}\n${value?.text ?? ''}`.trim())
+      }
+      case 'screen_long_press': {
+        if (args.text === undefined && (args.x === undefined || args.y === undefined)) {
+          throw new Error('需要 text，或者同时提供 x 与 y')
+        }
+        return textResult(await bridge('/ui/longpress', args))
+      }
       case 'screen_swipe':
         return textResult(await bridge('/ui/swipe', args))
       case 'screen_input':
         return textResult(await bridge('/ui/text', args))
+      case 'clipboard_set':
+        return textResult(await bridge('/actions/clipboard', args))
+      case 'share_text':
+        return textResult(await bridge('/actions/share', args))
+      case 'compose_mail':
+        return textResult(await bridge('/actions/mailto', args))
       case 'app_open':
         return textResult(await bridge('/app/open', args))
       case 'list_apps': {
