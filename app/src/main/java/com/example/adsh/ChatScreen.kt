@@ -121,6 +121,8 @@ fun ChatScreen(
     voiceRequest: Int = 0,
     speechLanguage: String = "zh-CN",
     speechEngine: String = "auto",
+    speechItn: Boolean = true,
+    speechSecondPass: Boolean = true,
     onVoiceRequestHandled: () -> Unit = {},
     onStartEngine: () -> Unit,
     onRetryEngine: () -> Unit,
@@ -166,8 +168,14 @@ fun ChatScreen(
 
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
-    val voice = remember(context, speechLanguage, speechEngine) {
-        VoiceInputController(context, { speechLanguage }, { speechEngine })
+    val voice = remember(context, speechLanguage, speechEngine, speechItn, speechSecondPass) {
+        VoiceInputController(
+            context,
+            { speechLanguage },
+            { speechEngine },
+            { speechItn },
+            { speechSecondPass },
+        )
     }
     val speaker = remember(context) { ReplySpeaker(context) }
     var listening by remember { mutableStateOf(false) }

@@ -2,13 +2,16 @@
 """Fetch and install the bundled sherpa-onnx speech stack for adsh.
 
 Downloads the sherpa-onnx AAR plus the streaming Zipformer, Silero VAD and
-CT-Transformer punctuation models (about 232 MiB of assets, 47 MiB AAR). They are not
-committed; run this once after cloning, before building an APK with the "本地增强"
-speech engine. Without the assets the app falls back to Vosk or the system recognizer.
+CT-Transformer punctuation models (about 232 MiB of assets, 47 MiB AAR), and the
+78 MiB Paraformer small model used for the optional second-pass final decode.
+They are not committed; run this once after cloning, before building an APK with
+the "本地增强" speech engine. Without the assets the app falls back to Vosk or
+the system recognizer.
 
 Usage:
     python3 tools/fetch_sherpa_models.py
     python3 tools/fetch_sherpa_models.py --force
+    python3 tools/fetch_sherpa_models.py --skip-second-pass
 """
 
 from __future__ import annotations
@@ -45,6 +48,14 @@ PUNCT_ROOT = "sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8
 
 VAD_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.int8.onnx"
 VAD_SHA256 = "c36d490aff5ab924ca6c7aeec4d8f6bd3d22db6fa17611b9c5b17eae58ac3a20"
+
+# Optional second-pass decoder. Served from HuggingFace because the GitHub release asset is
+# unreliable; the file contents are the same model published in the asr-models release.
+PARAFORMER_BASE = (
+    "https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-zh-small-2024-03-09/resolve/main"
+)
+PARAFORMER_MODEL_SHA256 = "3ef6c19369b912f7caf3cef8e545c5ccd1a33d9d7ec792a46668dc41c4b229ec"
+PARAFORMER_TOKENS_SHA256 = "4b2d964e18b9cf139b473003b6698fb2ed9a2a5ec55b93daa677b28f578897aa"
 
 HOTWORDS = ASSET_ROOT / "hotwords.txt"
 DEFAULT_HOTWORDS = """\
@@ -147,6 +158,11 @@ def install_model(url: str, expected: str, archive_root: str, files: list[Path])
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--force", action="store_true", help="re-download even if present")
+    parser.add_argument(
+        "--skip-second-pass",
+        action="store_true",
+        help="skip the optional 78 MiB Paraformer second-pass model",
+    )
     args = parser.parse_args()
 
     fetch(AAR_URL, AAR_SHA256, AAR_DEST, force=args.force)
@@ -175,6 +191,21 @@ def main() -> int:
 
     fetch(VAD_URL, VAD_SHA256, ASSET_ROOT / "vad/silero_vad.int8.onnx", force=args.force)
     require_assets(ASSET_ROOT / "vad", ["silero_vad.int8.onnx"])
+
+    if not args.skip_second_pass:
+        fetch(
+            f"{PARAFORMER_BASE}/model.int8.onnx",
+            PARAFORMER_MODEL_SHA256,
+            ASSET_ROOT / "paraformer/model.int8.onnx",
+            force=args.force,
+        )
+        fetch(
+            f"{PARAFORMER_BASE}/tokens.txt",
+            PARAFORMER_TOKENS_SHA256,
+            ASSET_ROOT / "paraformer/tokens.txt",
+            force=args.force,
+        )
+        require_assets(ASSET_ROOT / "paraformer", ["model.int8.onnx", "tokens.txt"])
 
     if not HOTWORDS.is_file():
         HOTWORDS.write_text(DEFAULT_HOTWORDS, encoding="utf-8")

@@ -25,6 +25,8 @@ class VoiceInputController(
     context: Context,
     private val languageProvider: () -> String = { "zh-CN" },
     private val engineProvider: () -> String = { "auto" },
+    private val itnProvider: () -> Boolean = { true },
+    private val secondPassProvider: () -> Boolean = { false },
 ) {
     private enum class Engine { SHERPA, OFFLINE, SYSTEM, NONE }
 
@@ -76,8 +78,14 @@ class VoiceInputController(
 
     /** Warm up the enhanced model in the background so the first hold-to-talk is responsive. */
     fun prepare() {
-        if (resolveEngine() == Engine.SHERPA) sherpa.prepare()
+        if (resolveEngine() == Engine.SHERPA) {
+            sherpa.setSecondPassEnabled(secondPassProvider())
+            sherpa.prepare()
+        }
     }
+
+    /** True when the optional second-pass model is bundled. */
+    fun secondPassAvailable(): Boolean = sherpa.secondPassInstalled()
 
     fun start(autoStop: Boolean = false) {
         when (resolveEngine()) {
@@ -100,6 +108,7 @@ class VoiceInputController(
     private fun startSherpa(autoStop: Boolean) {
         releaseRecognizer()
         active = Engine.SHERPA
+        sherpa.setSecondPassEnabled(secondPassProvider())
         sherpa.onListeningChanged = { listening -> setListening(listening) }
         sherpa.onPartial = { text ->
             if (text.isNotBlank()) onResult?.invoke(VoiceResult(text, isFinal = false))
@@ -107,8 +116,9 @@ class VoiceInputController(
         sherpa.onFinal = { text ->
             setListening(false)
             onLevel?.invoke(0f)
-            if (text.isBlank()) onError?.invoke("没有识别到语音内容")
-            else onResult?.invoke(VoiceResult(text, isFinal = true))
+            val final = normalizeFinal(text)
+            if (final.isBlank()) onError?.invoke("没有识别到语音内容")
+            else onResult?.invoke(VoiceResult(final, isFinal = true))
         }
         sherpa.onError = { message ->
             setListening(false)
@@ -130,8 +140,9 @@ class VoiceInputController(
         offline.onFinal = { text ->
             setListening(false)
             onLevel?.invoke(0f)
-            if (text.isBlank()) onError?.invoke("没有识别到语音内容")
-            else onResult?.invoke(VoiceResult(text, isFinal = true))
+            val final = normalizeFinal(text)
+            if (final.isBlank()) onError?.invoke("没有识别到语音内容")
+            else onResult?.invoke(VoiceResult(final, isFinal = true))
         }
         offline.onError = { message ->
             setListening(false)
@@ -166,7 +177,7 @@ class VoiceInputController(
             override fun onResults(results: Bundle?) {
                 setListening(false)
                 onLevel?.invoke(0f)
-                val text = firstResult(results)
+                val text = firstResult(results)?.let(::normalizeFinal)
                 if (text.isNullOrBlank()) onError?.invoke("没有识别到语音内容")
                 else onResult?.invoke(VoiceResult(text, isFinal = true))
             }
@@ -243,6 +254,9 @@ class VoiceInputController(
         running = value
         onListeningChanged?.invoke(value)
     }
+
+    private fun normalizeFinal(text: String): String =
+        if (itnProvider()) SpeechTextNormalizer.normalize(text) else text
 
     private fun firstResult(bundle: Bundle?): String? =
         bundle?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)

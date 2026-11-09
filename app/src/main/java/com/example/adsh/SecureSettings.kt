@@ -30,6 +30,8 @@ class SecureSettings(private val context: Context) {
     private val remoteEngineKey = stringPreferencesKey("remote_engine_url")
     private val speechLanguageKey = stringPreferencesKey("speech_language")
     private val speechEngineKey = stringPreferencesKey("speech_engine")
+    private val speechItnKey = stringPreferencesKey("speech_itn")
+    private val speechSecondPassKey = stringPreferencesKey("speech_second_pass")
     private val fastThinkingKey = stringPreferencesKey("fast_thinking")
 
     private fun key(): SecretKey {
@@ -110,6 +112,22 @@ class SecureSettings(private val context: Context) {
 
     suspend fun setSpeechEngine(value: String) {
         context.dataStore.edit { it[speechEngineKey] = value }
+    }
+
+    /** Convert unambiguous Chinese numerals (dates, clock times, percentages) to digits. */
+    suspend fun speechItn(): Boolean =
+        context.dataStore.data.first()[speechItnKey] != "false"
+
+    suspend fun setSpeechItn(value: Boolean) {
+        context.dataStore.edit { it[speechItnKey] = value.toString() }
+    }
+
+    /** Re-decode the whole utterance with the offline Paraformer model for the final result. */
+    suspend fun speechSecondPass(): Boolean =
+        context.dataStore.data.first()[speechSecondPassKey] != "false"
+
+    suspend fun setSpeechSecondPass(value: Boolean) {
+        context.dataStore.edit { it[speechSecondPassKey] = value.toString() }
     }
 
     /** Low reasoning effort for short device actions and quick questions. */

@@ -9,11 +9,16 @@ import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.OfflinePunctuation
 import com.k2fsa.sherpa.onnx.OfflinePunctuationConfig
 import com.k2fsa.sherpa.onnx.OfflinePunctuationModelConfig
+import com.k2fsa.sherpa.onnx.OfflineModelConfig
+import com.k2fsa.sherpa.onnx.OfflineParaformerModelConfig
+import com.k2fsa.sherpa.onnx.OfflineRecognizer
+import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OnlineModelConfig
 import com.k2fsa.sherpa.onnx.OnlineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
@@ -56,6 +61,9 @@ class SherpaSpeechRecognizer(context: Context) {
         private const val TOKENS = "$ASSET_ROOT/model/tokens.txt"
         private const val VAD_MODEL = "$ASSET_ROOT/vad/silero_vad.int8.onnx"
         private const val PUNCT_MODEL = "$ASSET_ROOT/punct/model.int8.onnx"
+        private const val PARAFORMER_MODEL = "$ASSET_ROOT/paraformer/model.int8.onnx"
+        private const val PARAFORMER_TOKENS = "$ASSET_ROOT/paraformer/tokens.txt"
+        private const val MAX_CAPTURE_SECONDS = 30
     }
 
     private val appContext = context.applicationContext
@@ -63,11 +71,16 @@ class SherpaSpeechRecognizer(context: Context) {
     private val worker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "adsh-sherpa-loader").apply { isDaemon = true }
     }
+    private val offlineWorker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "adsh-sherpa-offline").apply { isDaemon = true }
+    }
 
     @Volatile private var recognizer: OnlineRecognizer? = null
     @Volatile private var punctuation: OfflinePunctuation? = null
     @Volatile private var vad: Vad? = null
+    @Volatile private var offlineRecognizer: OfflineRecognizer? = null
     @Volatile private var hotwordsText: String = ""
+    @Volatile private var secondPass = false
     @Volatile private var loading = false
     @Volatile private var playing = false
     @Volatile private var recording = false
@@ -84,6 +97,11 @@ class SherpaSpeechRecognizer(context: Context) {
     private var gainControl: AutomaticGainControl? = null
     private var sessionThread: Thread? = null
     private val pendingReady = mutableListOf<(Boolean) -> Unit>()
+    private val offlineLock = Any()
+    private val captureLock = Any()
+    private var capturedPcm = ShortArray(0)
+    private var capturedSize = 0
+    private var capturedFull = false
 
     /** Fires on the main thread. [onLevel] is a 0..1 normalized microphone level. */
     var onPartial: ((String) -> Unit)? = null
@@ -101,6 +119,21 @@ class SherpaSpeechRecognizer(context: Context) {
     }.getOrDefault(false)
 
     fun isModelLoaded(): Boolean = recognizer != null
+
+    /** The optional Paraformer second-pass model is present in the APK. */
+    fun secondPassInstalled(): Boolean = runCatching {
+        val files = appContext.assets.list("$ASSET_ROOT/paraformer").orEmpty().toSet()
+        "model.int8.onnx" in files && "tokens.txt" in files
+    }.getOrDefault(false)
+
+    /**
+     * Enable re-decoding the buffered utterance with the small offline Paraformer model.
+     * The final result then comes from the offline pass; streaming partials are unchanged.
+     */
+    fun setSecondPassEnabled(value: Boolean) {
+        secondPass = value && secondPassInstalled()
+        if (value && !secondPass) Log.w(TAG, "second-pass model missing; keeping streaming result")
+    }
 
     fun isListening(): Boolean = playing
 
@@ -133,6 +166,11 @@ class SherpaSpeechRecognizer(context: Context) {
             mainHandler.post {
                 onReady?.invoke(ok)
                 callbacks.forEach { it(ok) }
+            }
+            if (ok && secondPass) {
+                // Load on a separate thread so a hold-to-talk that starts immediately does not
+                // queue behind the ~3 s Paraformer load.
+                offlineWorker.execute { offlineRecognizerOrLoad() }
             }
         }
     }
@@ -220,6 +258,8 @@ class SherpaSpeechRecognizer(context: Context) {
             vad = null
             runCatching { punctuation?.release() }
             punctuation = null
+            runCatching { offlineRecognizer?.release() }
+            offlineRecognizer = null
             runCatching { recognizer?.release() }
             recognizer = null
             hotwordsText = ""
@@ -233,7 +273,11 @@ class SherpaSpeechRecognizer(context: Context) {
      *
      * @return final recognized text (possibly empty), or null when the model is still loading.
      */
-    fun decodePcm(samples: ShortArray, chunkSize: Int = CHUNK_SAMPLES): String? {
+    fun decodePcm(
+        samples: ShortArray,
+        chunkSize: Int = CHUNK_SAMPLES,
+        secondPass: Boolean = false,
+    ): String? {
         val local = recognizer ?: run {
             prepare()
             return null
@@ -261,7 +305,19 @@ class SherpaSpeechRecognizer(context: Context) {
             stream.inputFinished()
             while (local.isReady(stream)) local.decode(stream)
             lastPartials = partials
-            return punctuate(local.getResult(stream).text)
+            val streaming = local.getResult(stream).text
+            val chosen = if (secondPass && secondPassInstalled()) {
+                val startedAt = SystemClock.elapsedRealtime()
+                val offline = runCatching { decodeOffline(samples) }.getOrNull()
+                Log.i(
+                    TAG,
+                    "SHERPA_SECOND_PASS=${offline.orEmpty()} (${SystemClock.elapsedRealtime() - startedAt} ms)",
+                )
+                offline?.takeIf { it.isNotBlank() } ?: streaming
+            } else {
+                streaming
+            }
+            return punctuate(chosen)
         } finally {
             runCatching { stream.release() }
         }
@@ -302,6 +358,7 @@ class SherpaSpeechRecognizer(context: Context) {
             }
             lastPartial = ""
             timedOut = false
+            resetCapture()
             recording = true
             if (!startRequested) {
                 recording = false
@@ -343,6 +400,7 @@ class SherpaSpeechRecognizer(context: Context) {
                 if (read == 0) continue
                 for (index in 0 until read) floats[index] = buffer[index] / 32768f
                 val chunk = if (read == CHUNK_SAMPLES) floats else floats.copyOf(read)
+                appendCapture(buffer, read)
                 postLevel(rmsLevel(buffer, read))
                 stream.acceptWaveform(chunk, SAMPLE_RATE)
                 while (local.isReady(stream)) local.decode(stream)
@@ -389,7 +447,7 @@ class SherpaSpeechRecognizer(context: Context) {
         runCatching { record.release() }
         if (audioRecord === record) audioRecord = null
         releaseAudioEffects()
-        val raw = runCatching {
+        var raw = runCatching {
             stream.inputFinished()
             while (local.isReady(stream)) local.decode(stream)
             local.getResult(stream).text
@@ -402,11 +460,100 @@ class SherpaSpeechRecognizer(context: Context) {
             cancelled = false
             return
         }
+        if (secondPass && !timedOut) {
+            captureSnapshot()?.let { samples ->
+                val startedAt = SystemClock.elapsedRealtime()
+                val offline = runCatching { decodeOffline(samples) }.getOrNull()
+                if (!offline.isNullOrBlank()) {
+                    Log.i(
+                        TAG,
+                        "SHERPA_SECOND_PASS=$offline (${SystemClock.elapsedRealtime() - startedAt} ms)",
+                    )
+                    raw = offline
+                }
+            }
+        }
         val text = punctuate(raw)
         if (text.isBlank()) {
             postError(if (timedOut) "没有检测到语音输入" else "没有识别到语音内容")
         } else {
             postFinal(text)
+        }
+    }
+
+    private fun resetCapture() {
+        synchronized(captureLock) {
+            capturedSize = 0
+            capturedFull = false
+            if (!secondPass) return
+            val size = SAMPLE_RATE * MAX_CAPTURE_SECONDS
+            if (capturedPcm.size < size) capturedPcm = ShortArray(size)
+        }
+    }
+
+    private fun appendCapture(buffer: ShortArray, count: Int) {
+        if (!secondPass) return
+        synchronized(captureLock) {
+            val room = capturedPcm.size - capturedSize
+            if (room <= 0) {
+                capturedFull = true
+                return
+            }
+            val copied = minOf(room, count)
+            if (count > room) capturedFull = true
+            System.arraycopy(buffer, 0, capturedPcm, capturedSize, copied)
+            capturedSize += copied
+        }
+    }
+
+    private fun captureSnapshot(): ShortArray? = synchronized(captureLock) {
+        // A truncated tail would make the offline result worse than the streaming one.
+        if (capturedFull || capturedSize < SAMPLE_RATE / 2) null
+        else capturedPcm.copyOf(capturedSize)
+    }
+
+    private fun decodeOffline(samples: ShortArray): String? {
+        val local = offlineRecognizerOrLoad() ?: return null
+        val floats = FloatArray(samples.size) { samples[it] / 32768f }
+        val stream = local.createStream()
+        return try {
+            stream.acceptWaveform(floats, SAMPLE_RATE)
+            local.decode(stream)
+            formatText(local.getResult(stream).text)
+        } finally {
+            runCatching { stream.release() }
+        }
+    }
+
+    private fun offlineRecognizerOrLoad(): OfflineRecognizer? {
+        offlineRecognizer?.let { return it }
+        synchronized(offlineLock) {
+            offlineRecognizer?.let { return it }
+            if (!secondPassInstalled()) return null
+            return runCatching {
+                OfflineRecognizer(
+                    appContext.assets,
+                    OfflineRecognizerConfig(
+                        featConfig = FeatureConfig(
+                            sampleRate = SAMPLE_RATE,
+                            featureDim = 80,
+                            dither = 0f,
+                        ),
+                        modelConfig = OfflineModelConfig(
+                            paraformer = OfflineParaformerModelConfig(model = PARAFORMER_MODEL),
+                            tokens = PARAFORMER_TOKENS,
+                            numThreads = 2,
+                            provider = "cpu",
+                        ),
+                        decodingMethod = "greedy_search",
+                    ),
+                ).also {
+                    offlineRecognizer = it
+                    Log.i(TAG, "second-pass Paraformer loaded")
+                }
+            }.onFailure {
+                Log.w(TAG, "second-pass Paraformer unavailable", it)
+            }.getOrNull()
         }
     }
 

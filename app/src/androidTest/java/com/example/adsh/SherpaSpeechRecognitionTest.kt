@@ -27,10 +27,36 @@ class SherpaSpeechRecognitionTest {
     fun packagedModelsAreUsedByDefaultEngine() {
         val engine = SherpaSpeechRecognizer(targetContext)
         assertTrue("assets/sherpa 模型未打包进 APK", engine.assetsInstalled())
+        assertTrue("二次解码模型未打包进 APK", engine.secondPassInstalled())
         assertTrue(
             "默认语音引擎应可用（本地增强或系统服务）",
             VoiceInputController(targetContext).available(),
         )
+    }
+
+    @Test
+    fun secondPassDecodeProducesChineseText() {
+        val engine = SherpaSpeechRecognizer(targetContext)
+        engine.setSecondPassEnabled(true)
+        assertTrue("sherpa 模型加载失败", prepareBlocking(engine, 300_000))
+
+        val audio = readWav(testContext.assets.open("test_zh.wav").readBytes())
+        val streaming = engine.decodePcm(audio.samples)
+        val startedAt = System.nanoTime()
+        val refined = engine.decodePcm(audio.samples, secondPass = true)
+        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+        println("SHERPA_STREAMING=$streaming")
+        println("SHERPA_REFINED=$refined")
+        println("SHERPA_REFINED_MS=$elapsedMs")
+
+        assertNotNull("二次解码返回 null", refined)
+        assertTrue("二次解码结果为空", refined!!.isNotBlank())
+        assertTrue(
+            "二次解码结果不含中文：$refined",
+            refined.any { it.code in 0x4E00..0x9FFF },
+        )
+        assertTrue("预热后的整句二次解码过慢：${elapsedMs}ms", elapsedMs < 5_000)
+        engine.release()
     }
 
     @Test

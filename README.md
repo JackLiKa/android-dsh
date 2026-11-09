@@ -48,7 +48,7 @@
 ### 4. 语音、唤醒与自动化
 
 - 对话页麦克风改为**长按说话**：按住约 350ms 开始识别，松手结束；识别中显示 8 段动态音量条与实时部分结果，最终文本写入输入框后仍可继续编辑，选择建议可替换为最终结果。首次使用请求 `RECORD_AUDIO`。
-- 语音引擎可在设置页选择“自动 / 本地增强 / Vosk 离线 / 系统”，语言可选普通话或粤语。“自动”在普通话下优先随附的 sherpa-onnx 流式模型（实时上屏、热词与标点），不可用时回退系统 `SpeechRecognizer`，再回退 Vosk；粤语仍依赖系统语音服务。进入对话页会后台预热本地模型。集成、性能与验证见[本地增强语音识别](docs/sherpa-offline-speech.md)。
+- 语音引擎可在设置页选择“自动 / 本地增强 / Vosk 离线 / 系统”，语言可选普通话或粤语。“自动”在普通话下优先随附的 sherpa-onnx 流式模型（实时上屏、热词与标点），不可用时回退系统 `SpeechRecognizer`，再回退 Vosk；粤语仍依赖系统语音服务。本地增强默认开启“数字与时间格式化”（明确的日期、时间、百分比、数量转阿拉伯数字）和“最终结果二次解码”（松手后用 Paraformer 离线模型重解整句，模型后台预热）。进入对话页会后台预热本地模型。集成、性能与验证见[本地增强语音识别](docs/sherpa-offline-speech.md)。
 - 流式回复同时展示思考摘要与正文，并给出阶段提示（正在思考 / 正在整理答案）、已生成字数、耗时和进度条；长回答边生成边渲染，减少等待焦虑。
 - 助手回复可通过标题栏的朗读开关交给系统 TTS 播报；只朗读已完成的回复，按消息去重，停止生成或出错时不朗读。
 - 无障碍悬浮球默认关闭。开启后常驻屏幕边缘并可拖动：轻点打开对话并开始语音，长按只打开对话，不引入 `SYSTEM_ALERT_WINDOW` 权限。
@@ -75,10 +75,10 @@
 
 ## 验证状态
 
-- `./gradlew --offline :app:testDebugUnitTest`：53 项 JVM 测试通过。
+- `./gradlew --offline :app:testDebugUnitTest`：57 项 JVM 测试通过。
 - `./gradlew --offline :app:lintDebug`：Android Lint 0 error、45 warning、4 information；Compose 检查器的二进制崩溃已通过把 Compose BOM 固定到 `2024.12.01`、lifecycle 固定到 `2.8.7`（与 Kotlin 2.0.21 / AGP 8.7.3 同代）根除，不再禁用会崩溃的检查器，仅保留 `ExpiredTargetSdkVersion` 豁免。
-- `./gradlew --offline :app:assembleDebug`：调试 APK 构建通过（约 482 MiB，含 Node/dsh payload、Vosk 与 sherpa 模型）。
-- 2026-11-09 离线语音在 arm64 模拟器 `emulator-5554`（Pixel 6，Android 14 / API 34）验证：`SherpaSpeechRecognitionTest` 2 项与 `OfflineSpeechRecognitionTest` 4 项 instrumentation 全部通过。sherpa 直接解码 16 kHz 中文 WAV 得到 `欢迎大家来体验达沿推出的语音识别模。`（12 个部分结果、带标点）；Vosk 回归输出 `欢迎 大家 来 体验 打磨 远 推出 的 语音识别 模型`。详见[本地增强语音识别](docs/sherpa-offline-speech.md)与[离线语音识别](docs/vosk-offline-speech.md)。
+- `./gradlew --offline :app:assembleDebug`：调试 APK 构建通过（约 561 MiB，含 Node/dsh payload、Vosk、sherpa 流式模型与 Paraformer 二次解码模型）。
+- 2026-11-09 离线语音在 arm64 模拟器 `emulator-5554`（Pixel 6，Android 14 / API 34）验证：`SherpaSpeechRecognitionTest` 3 项与 `OfflineSpeechRecognitionTest` 4 项 instrumentation 全部通过。sherpa 直接解码 16 kHz 中文 WAV，流式结果为 `欢迎大家来体验达沿推出的语音识别模。`（12 个部分结果、带标点），Paraformer 二次解码结果为 `欢迎大家来体验达摩院推出的语音识别模型。`；Vosk 回归输出 `欢迎 大家 来 体验 打磨 远 推出 的 语音识别 模型`。设置页 ITN/二次解码开关默认开启，关闭后强制停止并重启仍保持关闭。详见[本地增强语音识别](docs/sherpa-offline-speech.md)与[离线语音识别](docs/vosk-offline-speech.md)。
 - 2026-11-09 在 arm64 模拟器完成引擎链路验证：安装器完成 payload 校验/解压与 Node 启动，界面显示“已连接 dsh 引擎”；长按麦克风进入“正在聆听…”动态音量条，松手结束，无语音输入时提示“没有识别到语音内容”。引擎在默认 75 秒启动超时内就绪。
 - 模拟器 `emulator-5554`（Pixel 6，Android 14，360dp + 1.3 字体）实测：
   - 引擎启动、登录、健康探测成功；模型目录显示 `DeepSeek-V4.1-Flash`。
@@ -115,13 +115,15 @@ python3 tools/fetch_vosk_model.py
 
 脚本会下载 `vosk-model-small-cn-0.22`、校验 SHA-256 并解压到 `app/src/main/assets/vosk/model-cn`，详见[离线语音识别](docs/vosk-offline-speech.md)。
 
-本地增强引擎（sherpa-onnx AAR + 约 232 MiB 模型）同样不提交仓库，首次构建前运行：
+本地增强引擎（sherpa-onnx AAR + 约 310 MiB 模型）同样不提交仓库，首次构建前运行：
 
 ```sh
 python3 tools/fetch_sherpa_models.py
+# 不需要最终结果二次解码时，可跳过 78 MiB 的 Paraformer 模型：
+# python3 tools/fetch_sherpa_models.py --skip-second-pass
 ```
 
-脚本会下载并校验 AAR、流式 Zipformer、Silero VAD 与标点模型，已存在且哈希一致时跳过；详见[本地增强语音识别](docs/sherpa-offline-speech.md)。
+脚本会下载并校验 AAR、流式 Zipformer、Silero VAD、标点模型与 Paraformer small int8，已存在且哈希一致时跳过；详见[本地增强语音识别](docs/sherpa-offline-speech.md)。
 
 在本仓库同级检出上游源码并安装依赖（源码修复脚本使用其 `restructure@3.0.2` 完整包）：
 
@@ -195,9 +197,9 @@ adb -s <serial> shell am start -n com.example.adsh/.MainActivity --es profile we
 - 设备桥依赖无障碍与通知监听权限，不同厂商 ROM 可能限制后台前台服务或无障碍连接（真机 PJA110 上已通过）。
 - payload 来自第三方发布 APK 并由本地脚本修复，升级与再分发前需重新核对许可证和校验值；详见[运行时来源](docs/runtime-provenance.md)。
 - 历史会话与工作区由 dsh 引擎持久化；应用内“工作区”页只负责选择新会话的初始目录，不迁移引擎已有会话。
-- 本地增强引擎仅支持普通话，模型把“达摩院”识别为“达沿”属模型精度限制；热词受 2002 字符词表约束。粤语仍只能走系统语音服务。
-- 流式模型常驻 Native Heap 约 216 MB（含 VAD 与标点模型），应用总 PSS 约 315 MB；低内存设备可改为按需加载标点模型。
-- sherpa 资产约 232 MiB、AAR 47 MiB，Vosk 模型 65 MiB；三者与 payload 一样不入库，首次构建需分别运行 `tools/fetch_vosk_model.py` 与 `tools/fetch_sherpa_models.py`。
+- 本地增强引擎仅支持普通话；流式模型仍可能把“达摩院”识别为“达沿”，默认开启的 Paraformer 二次解码会在松手后纠正这类整句错误。热词受 2002 字符词表约束。粤语仍只能走系统语音服务。
+- 流式模型、标点与 Paraformer 常驻内存：默认（二次解码开启）Native Heap 约 461 MB、应用总 PSS 约 570 MB；关闭二次解码约 216 MB / 315 MB。低内存设备可在设置页关闭二次解码，并用 `--skip-second-pass` 不打包该模型。
+- sherpa 资产约 310 MiB（含 Paraformer）、AAR 47 MiB，Vosk 模型 65 MiB；三者与 payload 一样不入库，首次构建需分别运行 `tools/fetch_vosk_model.py` 与 `tools/fetch_sherpa_models.py`。
 - 当前只打包 `arm64-v8a`；x86_64 模拟器无法运行 sherpa 原生库，只能使用系统识别或 Vosk。
 - 随附 dsh payload 只含 arm64 的 Node ELF；arm64 模拟器可完整启动引擎，x86_64 模拟器仍需关闭 payload 校验或用 instrumentation 覆盖识别层。
 - Home 键长按依赖系统是否把按键事件转发给无障碍服务；Android 12+ 上更可靠的方式是把本应用设为默认助手。未授予任一条件时长按不会唤醒。

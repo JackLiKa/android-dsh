@@ -285,6 +285,8 @@ private fun App(
     var remoteError by remember { mutableStateOf<String?>(null) }
     var speechLanguage by remember { mutableStateOf("zh-CN") }
     var speechEngine by remember { mutableStateOf("auto") }
+    var speechItn by remember { mutableStateOf(true) }
+    var speechSecondPass by remember { mutableStateOf(true) }
     var fastThinking by remember { mutableStateOf(true) }
     var homeWake by remember { mutableStateOf(true) }
 
@@ -391,6 +393,8 @@ private fun App(
             remoteInput = remoteUrl
             speechLanguage = settings.speechLanguage()
             speechEngine = settings.speechEngine()
+            speechItn = settings.speechItn()
+            speechSecondPass = settings.speechSecondPass()
             fastThinking = settings.fastThinking()
             homeWake = AdshAccessibilityService.isHomeWakeEnabled(context)
             settingsLoaded = true
@@ -557,6 +561,8 @@ private fun App(
                     voiceRequest = voiceRequest,
                     speechLanguage = speechLanguage,
                     speechEngine = speechEngine,
+                    speechItn = speechItn,
+                    speechSecondPass = speechSecondPass,
                     onVoiceRequestHandled = onVoiceRequestHandled,
                     onStartEngine = startEngine,
                     onRetryEngine = startEngine,
@@ -1314,6 +1320,48 @@ private fun App(
                                             }
                                         }
                                     }
+                                }
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(stringResource(R.string.speech_itn))
+                                        Text(
+                                            stringResource(R.string.speech_itn_desc),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    Switch(
+                                        checked = speechItn,
+                                        onCheckedChange = { value ->
+                                            speechItn = value
+                                            scope.launch { settings.setSpeechItn(value) }
+                                        },
+                                    )
+                                }
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(stringResource(R.string.speech_second_pass))
+                                        Text(
+                                            stringResource(R.string.speech_second_pass_desc),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    Switch(
+                                        checked = speechSecondPass,
+                                        onCheckedChange = { value ->
+                                            speechSecondPass = value
+                                            scope.launch { settings.setSpeechSecondPass(value) }
+                                        },
+                                    )
                                 }
                                 Row(
                                     Modifier.fillMaxWidth(),

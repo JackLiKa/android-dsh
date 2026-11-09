@@ -27,3 +27,4 @@ app/libs/*.aar
 app/src/main/assets/sherpa/model/
 app/src/main/assets/sherpa/vad/
 app/src/main/assets/sherpa/punct/
+app/src/main/assets/sherpa/paraformer/

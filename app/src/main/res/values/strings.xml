@@ -241,6 +241,10 @@
     <string name="speech_engine_sherpa">本地增强</string>
     <string name="speech_engine_offline">Vosk 离线</string>
     <string name="speech_engine_system">系统</string>
+    <string name="speech_itn">数字与时间格式化</string>
+    <string name="speech_itn_desc">把明确的日期、时间、百分比和数量转成阿拉伯数字，如“二零二六年”转为“2026年”</string>
+    <string name="speech_second_pass">最终结果二次解码</string>
+    <string name="speech_second_pass_desc">松手后用 Paraformer 离线模型重解整句，最终文本更准；模型约 78 MiB，预热后约 0.1 秒</string>
     <string name="speech_hint">长按麦克风说话，松开结束。识别结果会写入输入框，可先编辑再发送。本地增强使用流式模型，支持普通话、实时上屏与自动标点；Vosk 离线仅支持普通话；粤语需要系统语音服务。</string>
     <string name="fast_thinking">快速响应</string>
     <string name="fast_thinking_desc">简单任务直接执行，使用最低推理强度</string>
