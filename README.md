@@ -7,6 +7,7 @@
 - [Kotlin 插件 SDK 契约](docs/plugin-sdk-android.md)
 - [运行时来源与校验](docs/runtime-provenance.md)
 - [真机验证记录](docs/real-device-verification.md)
+- [离线语音识别（Vosk）](docs/vosk-offline-speech.md)
 
 ## 已实现能力
 
@@ -36,7 +37,7 @@
 
 - 应用在本机回环地址启动临时端口的 broker，使用 32 字节随机 token 做常量时间校验。
 - 引擎通过 `--patch` 叠加 `@deepseek-ai/dsh-mcp-client`，以 stdio 启动随附的零依赖 MCP server；工具统一暴露为 `mcp__adsh_device__*`。
-- 提供 15 个工具：设备信息、通知列表、界面树快照、点击、滑动、输入文本、打开应用、应用列表、设置闹钟、设置计时器、预填短信、直接发送短信、打开拨号、朗读文本、停止朗读。
+- 提供 16 个工具：设备信息、通知列表、界面树快照、点击、滑动、输入文本、打开应用、应用列表、设置闹钟、设置计时器、查询天气、预填短信、直接发送短信、打开拨号、朗读文本、停止朗读。天气查询使用 Open-Meteo（免 API Key），一次调用返回当前天气与三天预报。
 - 界面树限制节点数与深度；点击按“精确文本 → 部分文本 → 索引 → 可点击祖先 → 坐标手势”降级。
 - 无障碍与通知监听权限由系统单独授予；设置页展示授权状态、broker 端口和最近 6 条设备调用审计记录。
 - 关闭开关会删除 patch、停止 broker 并重启引擎；引擎未运行时只保存设置。
@@ -45,9 +46,12 @@
 
 ### 4. 语音、唤醒与自动化
 
-- 对话页麦克风支持语音输入：短按把识别结果填入输入框，长按识别完成后直接发送；首次使用请求 `RECORD_AUDIO`，不可用时提示并保留系统语音输入回退。
+- 对话页麦克风改为**长按说话**：按住约 350ms 开始识别，松手结束；识别中显示 8 段动态音量条与实时部分结果，最终文本写入输入框后仍可继续编辑，选择建议可替换为最终结果。首次使用请求 `RECORD_AUDIO`。
+- 语音引擎可在设置页选择“自动 / 离线 / 系统”，语言可选普通话或粤语。“自动”优先系统 `SpeechRecognizer`（通常更准，且粤语依赖系统服务），系统识别不可用时回退随附 Vosk 离线中文模型；离线引擎仅支持普通话。集成与选型见[离线语音识别](docs/vosk-offline-speech.md)。
+- 流式回复同时展示思考摘要与正文，并给出阶段提示（正在思考 / 正在整理答案）、已生成字数、耗时和进度条；长回答边生成边渲染，减少等待焦虑。
 - 助手回复可通过标题栏的朗读开关交给系统 TTS 播报；只朗读已完成的回复，按消息去重，停止生成或出错时不朗读。
 - 无障碍悬浮球默认关闭。开启后常驻屏幕边缘并可拖动：轻点打开对话并开始语音，长按只打开对话，不引入 `SYSTEM_ALERT_WINDOW` 权限。
+- 手势唤醒：设置页可开启“主屏幕键长按 3 秒唤醒”。应用声明 `ACTION_ASSIST` 并可申请默认助手角色；在转发按键事件的系统上由无障碍 `onKeyEvent` 计时触发，否则由系统默认助手长按入口触发，均直接打开对话并开始聆听。短按 Home 不会误触发。
 - “自动化”页可保存常用任务并一键执行；内置闹钟、计时器、短信预填、查看屏幕、总结通知等示例模板。
 - 设置页新增“远程控制电脑端”：填入电脑上 `dsh web` 打印的带 token 地址后，Compose 直接连接该远程引擎；地址加密保存在本机，可随时断开回到本机引擎。
 - 闹钟/计时器/拨号走系统公开 Intent；`compose_sms` 只打开信息应用并预填，`send_sms` 通过 `SmsManager` 直接发送，需在设置页单独授予“短信发送”权限，并且只在用户明确要求发送时调用。`send_sms` 会等待最多 15 秒的发送回执（从调用开始计时，包含系统确认耗时），返回“短信发送成功”或具体失败原因（含运营商错误码）。一加/ColorOS 等系统会在发送时弹出系统确认（约 8 秒倒计时，连续发送均观察到该确认），需在手机上点“发送”后才会发出；未确认时系统会取消该次发送，工具返回“未收到完整发送回执”。
@@ -73,6 +77,8 @@
 - `./gradlew --offline :app:testDebugUnitTest`：52 项 JVM 测试通过。
 - `./gradlew --offline :app:lintDebug`：Android Lint 0 error、41 warning；Compose 检查器的二进制崩溃已通过把 Compose BOM 固定到 `2024.12.01`、lifecycle 固定到 `2.8.7`（与 Kotlin 2.0.21 / AGP 8.7.3 同代）根除，不再禁用会崩溃的检查器，仅保留 `ExpiredTargetSdkVersion` 豁免。
 - `./gradlew --offline :app:assembleDebug`：调试 APK 构建通过（约 174 MB，含 Node/dsh payload）。
+- 2026-11-08 离线语音（Vosk）在模拟器 `emulator-5554`（Android 17 / API 37 / x86_64）验证：`OfflineSpeechRecognitionTest` 4 项 instrumentation 测试通过（模型打包、加载幂等、16 kHz 中文 WAV 解码、麦克风会话启停）；WAV 识别输出“欢迎 大家 来 体验 打磨 远 推出 的 语音识别 模型”。同次构建（无 payload）APK 110.1 MB。详见[离线语音识别](docs/vosk-offline-speech.md)。
+- 2026-11-09 使用替代 arm64 运行时（`vosk` 分支本地打包）在模拟器上完成引擎链路验证：安装器完成 160 MB payload 校验/解压、soname 别名与 ELF RUNPATH 修复后，x86_64 模拟器的 ARM 翻译层能启动 Node，日志出现 `dsh web: http://127.0.0.1:3080/?token=***` 与 `dsh Web 已就绪`，界面显示“已连接 dsh 引擎”。该验证使用了临时放宽的 300 秒启动超时（`-PstartupTimeoutMs=300000`）；手机原生 arm64 下保持默认 75 秒。
 - 模拟器 `emulator-5554`（Pixel 6，Android 14，360dp + 1.3 字体）实测：
   - 引擎启动、登录、健康探测成功；模型目录显示 `DeepSeek-V4.1-Flash`。
   - 会话、follow 流、历史列表、日志复制、深色主题保持与设备桥开关撤销均正常。
@@ -98,7 +104,15 @@
 
 ### 准备运行时
 
-本仓库只跟踪代码和文档。APK、Node/dsh payload 及参考 payload 备份超过 GitHub 普通文件限制，均由 `.gitignore` 排除。首次克隆后先准备运行时；本地生成的 APK 包含完整 payload，运行时不依赖再次下载。参考发布包的来源、许可证与 SHA-256 见[运行时来源](docs/runtime-provenance.md)。
+本仓库只跟踪代码和文档。APK、Node/dsh payload、参考 payload 备份与 Vosk 中文模型均超过 GitHub 普通文件限制，由 `.gitignore` 排除。首次克隆后先准备运行时；本地生成的 APK 包含完整 payload，运行时不依赖再次下载。参考发布包的来源、许可证与 SHA-256 见[运行时来源](docs/runtime-provenance.md)。
+
+离线语音模型（65 MiB）在构建前单独准备：
+
+```sh
+python3 tools/fetch_vosk_model.py
+```
+
+脚本会下载 `vosk-model-small-cn-0.22`、校验 SHA-256 并解压到 `app/src/main/assets/vosk/model-cn`，详见[离线语音识别](docs/vosk-offline-speech.md)。
 
 在本仓库同级检出上游源码并安装依赖（源码修复脚本使用其 `restructure@3.0.2` 完整包）：
 
@@ -134,7 +148,20 @@ JAVA_HOME=/path/to/jdk-21 ./gradlew :app:check :app:assembleDebug
 
 `targetSdk` 固定为 28，是为了让随附 Node ELF 在应用私有目录中可执行；升级前必须重新验证运行时与平台策略。
 
-`:app:check` 同时执行单元测试与 `lintDebug`。AGP 8.7.3 自带的 Kotlin 分析 API 与新 Compose/lifecycle lint 检查器存在二进制不兼容（`IncompatibleClassChangeError`），因此精确禁用会崩溃的 4 个检查：`NullSafeMutableLiveData`、`FlowOperatorInvokedInComposition`、`UnrememberedMutableState`、`RememberInComposition`；`targetSdk = 28` 是运行时硬性要求，故豁免 `ExpiredTargetSdkVersion`。其余检查保持开启。
+若工作区暂时没有 `app/src/main/assets/dsh/payload.zip`（仓库不跟踪），仅做界面/语音验证可在构建命令后加 `-x checkRuntimePayload`；此时 dsh 引擎不可用，语音识别等不依赖引擎的功能仍可验证。
+
+### 使用替代 payload 打包（可选）
+
+如果拿不到固定指纹的参考 payload，可以把任一满足 `runtime/bin/node`、`dshroot/lib/node_modules/@deepseek-ai/dsh/lib/bin.js`、`dshhome/profiles/web/package.json` 布局的 arm64 运行时放到 `app/src/main/assets/dsh/payload.zip`，并用 `-PpayloadSha=<sha256>` 覆盖校验值：
+
+```sh
+sha=$(shasum -a 256 app/src/main/assets/dsh/payload.zip | cut -d' ' -f1)
+./gradlew :app:assembleDebug -PpayloadSha=$sha
+```
+
+安装器会自动恢复 `runtime/lib/LINKS.txt` 里的 soname 别名，并把 ELF 的 Termux `DT_RUNPATH` 改写为 `$ORIGIN`（详见[运行时来源](docs/runtime-provenance.md)）。这样打出的 APK 的运行时并非固定指纹版本，发布前必须重新核对来源、许可证与校验值。
+
+`:app:check` 同时执行单元测试与 `lintDebug`。AGP 8.7.3 自带的 Kotlin 分析 API 与新 Compose/lifecycle lint 检查器存在二进制不兼容（`IncompatibleClassChangeError`），因此精确禁用会崩溃的 7 个检查：`NullSafeMutableLiveData`、`FlowOperatorInvokedInComposition`、`UnrememberedMutableState`、`RememberInComposition`、`AutoboxingStateCreation`、`FrequentlyChangingValue`、`StateFlowValueCalledInComposition`；`targetSdk = 28` 是运行时硬性要求，故豁免 `ExpiredTargetSdkVersion`。其余检查保持开启。
 
 ### 安装与启动
 
@@ -159,3 +186,8 @@ adb -s <serial> shell am start -n com.example.adsh/.MainActivity --es profile we
 - 设备桥依赖无障碍与通知监听权限，不同厂商 ROM 可能限制后台前台服务或无障碍连接（真机 PJA110 上已通过）。
 - payload 来自第三方发布 APK 并由本地脚本修复，升级与再分发前需重新核对许可证和校验值；详见[运行时来源](docs/runtime-provenance.md)。
 - 历史会话与工作区由 dsh 引擎持久化；应用内“工作区”页只负责选择新会话的初始目录，不迁移引擎已有会话。
+- 离线语音使用小模型 `vosk-model-small-cn-0.22`（65 MiB），同音/近音词会识别错误（如“达摩院”→“打磨远”），且输出无标点；追求精度可换大模型或迁移 sherpa-onnx。默认“自动”已优先系统识别，离线模型主要作为无系统服务时的兜底。
+- 离线模型使 APK 增加约 65 MiB；模型与 payload 一样不入库，首次构建需运行 `tools/fetch_vosk_model.py`。
+- 随附 dsh payload 只含 arm64 的 Node ELF；arm64 模拟器可完整启动引擎，x86_64 模拟器仍需关闭 payload 校验或用 instrumentation 覆盖识别层。
+- Home 键长按依赖系统是否把按键事件转发给无障碍服务；Android 12+ 上更可靠的方式是把本应用设为默认助手。未授予任一条件时长按不会唤醒。
+- 天气查询需要网络，使用 Open-Meteo 公开接口；城市名需能在其地理编码库中匹配，查询失败会返回明确中文错误。

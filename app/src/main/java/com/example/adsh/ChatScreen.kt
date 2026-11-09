@@ -9,11 +9,15 @@ import android.speech.RecognizerIntent
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -73,8 +77,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
@@ -97,9 +105,12 @@ import com.example.adsh.engine.DshSessionSummary
 import com.example.adsh.engine.DshStreaming
 import com.example.adsh.engine.DshToolCall
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private const val LONG_PRESS_TALK_MS = 350L
 
 @Composable
 fun ChatScreen(
@@ -108,6 +119,8 @@ fun ChatScreen(
     engineStatus: EngineStatus,
     initialPrompt: String = "",
     voiceRequest: Int = 0,
+    speechLanguage: String = "zh-CN",
+    speechEngine: String = "auto",
     onVoiceRequestHandled: () -> Unit = {},
     onStartEngine: () -> Unit,
     onRetryEngine: () -> Unit,
@@ -152,13 +165,32 @@ fun ChatScreen(
     }
 
     val context = LocalContext.current
-    val voice = remember(context) { VoiceInputController(context) }
+    val haptics = LocalHapticFeedback.current
+    val voice = remember(context, speechLanguage, speechEngine) {
+        VoiceInputController(context, { speechLanguage }, { speechEngine })
+    }
     val speaker = remember(context) { ReplySpeaker(context) }
     var listening by remember { mutableStateOf(false) }
+    var voiceLevel by remember { mutableStateOf(0f) }
     var voiceError by remember { mutableStateOf<String?>(null) }
     var speakReplies by remember { mutableStateOf(false) }
-    var sendOnFinal by remember { mutableStateOf(false) }
     var lastSpoken by remember { mutableStateOf<String?>(null) }
+    // Text the composer held before dictation, and the last text we wrote into it.
+    var voiceSeed by remember { mutableStateOf("") }
+    var voiceWritten by remember { mutableStateOf<String?>(null) }
+    var voiceSuggestion by remember { mutableStateOf<String?>(null) }
+
+    // Never clobber text the user edited while speaking; offer the final result instead.
+    val applyVoiceText: (String, Boolean) -> Unit = { text, final ->
+        val merged = if (voiceSeed.isBlank()) text else "$voiceSeed $text"
+        if (prompt == voiceWritten) {
+            prompt = merged
+            voiceWritten = merged
+            voiceSuggestion = null
+        } else if (final) {
+            voiceSuggestion = text
+        }
+    }
 
     val fallbackLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -171,30 +203,31 @@ fun ChatScreen(
         } else {
             ""
         }
-        when {
-            text.isNotEmpty() && sendOnFinal -> {
-                sendOnFinal = false
-                prompt = ""
-                onSend(text)
-            }
-            text.isNotEmpty() -> prompt = text
-            sendOnFinal -> sendOnFinal = false
+        if (text.isNotEmpty()) {
+            voiceSeed = prompt.trim()
+            voiceWritten = prompt
+            applyVoiceText(text, true)
         }
     }
 
     val beginRecognition: () -> Unit = {
+        voiceSuggestion = null
         if (voice.available()) {
+            voiceSeed = prompt.trim()
+            voiceWritten = prompt
             voice.start()
         } else {
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
+                putExtra(
+                    RecognizerIntent.EXTRA_LANGUAGE,
+                    if (speechLanguage == "zh-HK") "zh-HK" else "zh-CN",
+                )
                 putExtra(RecognizerIntent.EXTRA_PROMPT, context.getString(R.string.voice_input))
             }
             try {
                 fallbackLauncher.launch(intent)
             } catch (error: Exception) {
-                sendOnFinal = false
                 voiceError = context.getString(R.string.voice_unavailable)
             }
         }
@@ -206,14 +239,12 @@ fun ChatScreen(
         if (granted) {
             beginRecognition()
         } else {
-            sendOnFinal = false
             voiceError = context.getString(R.string.voice_permission_needed)
         }
     }
 
-    val beginVoice: (Boolean) -> Unit = { sendWhenDone ->
+    val beginVoice: () -> Unit = {
         voiceError = null
-        sendOnFinal = sendWhenDone
         val granted = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
         if (granted) beginRecognition()
@@ -223,25 +254,18 @@ fun ChatScreen(
     LaunchedEffect(voiceRequest) {
         if (voiceRequest > 0) {
             onVoiceRequestHandled()
-            beginVoice(false)
+            beginVoice()
         }
     }
 
     DisposableEffect(voice) {
-        voice.onListeningChanged = { listening = it }
-        voice.onResult = { result ->
-            prompt = result.text
-            if (result.isFinal && sendOnFinal) {
-                sendOnFinal = false
-                val text = result.text
-                prompt = ""
-                onSend(text)
-            }
+        voice.onListeningChanged = { active ->
+            listening = active
+            if (!active) voiceLevel = 0f
         }
-        voice.onError = { message ->
-            sendOnFinal = false
-            voiceError = message
-        }
+        voice.onLevel = { level -> voiceLevel = level }
+        voice.onResult = { result -> applyVoiceText(result.text, result.isFinal) }
+        voice.onError = { message -> voiceError = message }
         onDispose {
             voice.release()
             speaker.release()
@@ -470,12 +494,32 @@ fun ChatScreen(
             },
             onStop = onCancel,
             listening = listening,
-            onVoice = {
-                if (listening) voice.stop()
-                else if (state.engineReady) beginVoice(false)
+            voiceLevel = voiceLevel,
+            onVoiceTap = {
+                if (listening) {
+                    voice.stop()
+                } else {
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.voice_hold_hint),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
             },
-            onVoiceLong = {
-                if (!listening && state.engineReady) beginVoice(true)
+            onVoiceStart = {
+                if (!listening && state.engineReady) {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    beginVoice()
+                }
+            },
+            onVoiceStop = { voice.stop() },
+            voiceSuggestion = voiceSuggestion,
+            onApplyVoiceSuggestion = {
+                voiceSuggestion?.let { text ->
+                    prompt = if (voiceSeed.isBlank()) text else "$voiceSeed $text"
+                    voiceWritten = prompt
+                    voiceSuggestion = null
+                }
             },
             queuedText = queued,
             onCancelQueued = { queued = null },
@@ -835,25 +879,39 @@ private fun StreamingBubble(stream: DshStreaming) {
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-            if (stream.reasoning.isNotBlank() && stream.text.isBlank()) {
+            if (stream.reasoning.isNotBlank()) {
+                Text(
+                    stringResource(R.string.streaming_reasoning_label),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(2.dp))
                 Text(
                     stream.reasoning,
                     style = MaterialTheme.typography.bodySmall,
                     fontStyle = FontStyle.Italic,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 8,
+                    maxLines = if (stream.text.isBlank()) 8 else 4,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.height(8.dp))
             }
             if (stream.text.isNotBlank()) {
                 MarkdownText(stream.text, modifier = Modifier.fillMaxWidth())
+                Text(
+                    "▍",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        stringResource(R.string.thinking),
+                        stringResource(
+                            if (stream.reasoning.isNotBlank()) R.string.streaming_composing
+                            else R.string.thinking,
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1005,13 +1063,62 @@ private fun Composer(
     onSend: () -> Unit,
     onStop: () -> Unit,
     listening: Boolean,
-    onVoice: () -> Unit,
-    onVoiceLong: () -> Unit,
+    voiceLevel: Float,
+    onVoiceTap: () -> Unit,
+    onVoiceStart: () -> Unit,
+    onVoiceStop: () -> Unit,
+    voiceSuggestion: String?,
+    onApplyVoiceSuggestion: () -> Unit,
     queuedText: String?,
     onCancelQueued: () -> Unit,
 ) {
     Surface(tonalElevation = 3.dp) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            if (listening) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    VoiceLevelIndicator(voiceLevel)
+                    Text(
+                        stringResource(R.string.voice_listening),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        stringResource(R.string.voice_listen_hint),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+            }
+            voiceSuggestion?.let { text ->
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                ) {
+                    Row(
+                        Modifier.padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            stringResource(R.string.voice_suggestion, text),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = onApplyVoiceSuggestion) {
+                            Text(stringResource(R.string.voice_apply))
+                        }
+                    }
+                }
+            }
             queuedText?.let { text ->
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
@@ -1051,11 +1158,25 @@ private fun Composer(
                     Modifier
                         .size(48.dp)
                         .clip(CircleShape)
-                        .combinedClickable(
-                            enabled = enabled,
-                            onClick = onVoice,
-                            onLongClick = onVoiceLong,
-                        ),
+                        .background(
+                            if (listening) MaterialTheme.colorScheme.primaryContainer
+                            else Color.Transparent,
+                        )
+                        .pointerInput(enabled) {
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                val released = withTimeoutOrNull(LONG_PRESS_TALK_MS) {
+                                    waitForUpOrCancellation()
+                                }
+                                if (released == null && enabled) {
+                                    onVoiceStart()
+                                    waitForUpOrCancellation()
+                                    onVoiceStop()
+                                } else if (released != null) {
+                                    onVoiceTap()
+                                }
+                            }
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
@@ -1113,6 +1234,32 @@ private fun Composer(
                 ),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun VoiceLevelIndicator(level: Float, modifier: Modifier = Modifier) {
+    val weights = listOf(0.55f, 0.85f, 1f, 0.7f, 0.95f, 0.6f, 0.8f, 0.5f)
+    Row(
+        modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        weights.forEachIndexed { index, weight ->
+            val target = 0.16f + level.coerceIn(0f, 1f) * weight * 0.84f
+            val height by animateFloatAsState(
+                targetValue = target,
+                animationSpec = tween(durationMillis = 90),
+                label = "voice-level-$index",
+            )
+            Box(
+                Modifier
+                    .width(4.dp)
+                    .height((24f * height).dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.primary),
             )
         }
     }

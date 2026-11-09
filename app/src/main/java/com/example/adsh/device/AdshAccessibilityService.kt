@@ -6,8 +6,11 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
@@ -34,10 +37,12 @@ class AdshAccessibilityService : AccessibilityService() {
     companion object {
         private const val PREFS = "adsh_wake"
         private const val KEY_BUBBLE = "bubble_enabled"
+        private const val KEY_HOME_WAKE = "home_wake_enabled"
         private const val KEY_X = "bubble_x"
         private const val KEY_Y = "bubble_y"
         private const val BUBBLE_DP = 56
         private const val LONG_PRESS_MS = 520L
+        private const val HOME_WAKE_MS = 3_000L
 
         @Volatile private var active: AdshAccessibilityService? = null
 
@@ -62,6 +67,13 @@ class AdshAccessibilityService : AccessibilityService() {
             active?.applyBubblePreference()
         }
 
+        fun isHomeWakeEnabled(context: Context): Boolean =
+            prefs(context).getBoolean(KEY_HOME_WAKE, true)
+
+        fun setHomeWakeEnabled(context: Context, enabled: Boolean) {
+            prefs(context).edit().putBoolean(KEY_HOME_WAKE, enabled).apply()
+        }
+
         /** Re-applies the stored preference; safe to call from the settings UI. */
         fun refreshBubble(context: Context) {
             active?.applyBubblePreference()
@@ -71,6 +83,16 @@ class AdshAccessibilityService : AccessibilityService() {
     private var windowManager: WindowManager? = null
     private var bubble: View? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var homeDownAt = 0L
+    private var homeDown = false
+    private var homeTriggered = false
+    private val homeWakeRunnable = Runnable {
+        if (homeDown && !homeTriggered && isHomeWakeEnabled(this)) {
+            homeTriggered = true
+            openChat(withVoice = true)
+        }
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -83,7 +105,39 @@ class AdshAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() = Unit
 
+    /**
+     * Best-effort 3 s Home-key wake. Many Android builds deliver Home to the system before
+     * accessibility key filtering, so the default-assistant role is the reliable trigger.
+     */
+    override fun onKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode != KeyEvent.KEYCODE_HOME) return false
+        if (!isHomeWakeEnabled(this)) return false
+        if (event.action == KeyEvent.ACTION_UP) {
+            homeDown = false
+            homeDownAt = 0L
+            mainHandler.removeCallbacks(homeWakeRunnable)
+            val consumed = homeTriggered
+            homeTriggered = false
+            return consumed
+        }
+        if (homeTriggered) return true
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            if (event.repeatCount == 0) {
+                homeDown = true
+                homeDownAt = SystemClock.uptimeMillis()
+                homeTriggered = false
+                mainHandler.removeCallbacks(homeWakeRunnable)
+                mainHandler.postDelayed(homeWakeRunnable, HOME_WAKE_MS)
+            } else if (SystemClock.uptimeMillis() - homeDownAt >= HOME_WAKE_MS) {
+                homeTriggered = true
+                openChat(withVoice = true)
+            }
+        }
+        return false
+    }
+
     override fun onDestroy() {
+        mainHandler.removeCallbacks(homeWakeRunnable)
         removeBubble()
         if (active === this) active = null
         super.onDestroy()

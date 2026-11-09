@@ -11,32 +11,115 @@ import java.util.Locale
 
 data class VoiceResult(val text: String, val isFinal: Boolean)
 
-/** SpeechRecognizer wrapper; callbacks fire on the main thread. */
-class VoiceInputController(context: Context) {
+/**
+ * Voice input facade; callbacks fire on the main thread.
+ *
+ * Engine selection:
+ * - `auto` prefers the system recognizer when present (usually more accurate and supports
+ *   Cantonese), and falls back to the bundled Vosk Mandarin model.
+ * - `offline` forces the bundled Vosk model (Mandarin only).
+ * - `system` forces the platform recognizer (Mandarin or Cantonese).
+ */
+class VoiceInputController(
+    context: Context,
+    private val languageProvider: () -> String = { "zh-CN" },
+    private val engineProvider: () -> String = { "auto" },
+) {
+    private enum class Engine { OFFLINE, SYSTEM, NONE }
+
     private val appContext = context.applicationContext
+    private val offline = OfflineSpeechRecognizer(appContext)
     private var recognizer: SpeechRecognizer? = null
     private var running = false
+    private var usingOffline = false
 
     var onResult: ((VoiceResult) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
     var onListeningChanged: ((Boolean) -> Unit)? = null
 
-    fun available(): Boolean = SpeechRecognizer.isRecognitionAvailable(appContext)
+    /** 0..1 microphone level for the listening animation. */
+    var onLevel: ((Float) -> Unit)? = null
+
+    private fun language(): String = when (languageProvider()) {
+        "zh-HK", "yue-HK", "yue" -> "zh-HK"
+        else -> "zh-CN"
+    }
+
+    private fun resolveEngine(): Engine {
+        val preference = engineProvider()
+        val system = SpeechRecognizer.isRecognitionAvailable(appContext)
+        val offlineReady = offline.assetsInstalled() && language() == "zh-CN"
+        return when {
+            preference == "offline" && offlineReady -> Engine.OFFLINE
+            preference == "system" && system -> Engine.SYSTEM
+            preference == "auto" && system -> Engine.SYSTEM
+            offlineReady -> Engine.OFFLINE
+            system -> Engine.SYSTEM
+            else -> Engine.NONE
+        }
+    }
+
+    /** True when the selected language/engine combination can recognize speech. */
+    fun available(): Boolean = resolveEngine() != Engine.NONE
+
+    /** True when the current/last session used the offline engine (diagnostics). */
+    fun usingOfflineEngine(): Boolean = usingOffline
 
     fun isListening(): Boolean = running
 
     fun start() {
-        if (!available()) {
-            onError?.invoke("当前设备没有可用的语音识别服务")
-            return
+        when (resolveEngine()) {
+            Engine.NONE -> {
+                onError?.invoke(
+                    if (language() == "zh-HK") {
+                        "粤语识别需要系统语音服务，当前设备未提供"
+                    } else {
+                        "当前设备没有可用的语音识别服务"
+                    },
+                )
+                return
+            }
+            Engine.OFFLINE -> startOffline()
+            Engine.SYSTEM -> startSystem()
         }
+    }
+
+    private fun startOffline() {
         releaseRecognizer()
+        usingOffline = true
+        offline.onListeningChanged = { listening -> setListening(listening) }
+        offline.onPartial = { text ->
+            if (text.isNotBlank()) onResult?.invoke(VoiceResult(text, isFinal = false))
+        }
+        offline.onFinal = { text ->
+            setListening(false)
+            onLevel?.invoke(0f)
+            if (text.isBlank()) onError?.invoke("没有识别到语音内容")
+            else onResult?.invoke(VoiceResult(text, isFinal = true))
+        }
+        offline.onError = { message ->
+            setListening(false)
+            onLevel?.invoke(0f)
+            onError?.invoke(message)
+        }
+        offline.onLevel = { level -> onLevel?.invoke(level) }
+        setListening(true)
+        offline.start()
+    }
+
+    private fun startSystem() {
+        releaseRecognizer()
+        usingOffline = false
+        val language = language()
         val created = SpeechRecognizer.createSpeechRecognizer(appContext)
         recognizer = created
         created.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) = setListening(true)
             override fun onBeginningOfSpeech() = Unit
-            override fun onRmsChanged(rmsdB: Float) = Unit
+            override fun onRmsChanged(rmsdB: Float) {
+                onLevel?.invoke(((rmsdB + 2f) / 12f).coerceIn(0f, 1f))
+            }
+
             override fun onBufferReceived(buffer: ByteArray?) = Unit
             override fun onEndOfSpeech() = setListening(false)
 
@@ -46,6 +129,7 @@ class VoiceInputController(context: Context) {
 
             override fun onResults(results: Bundle?) {
                 setListening(false)
+                onLevel?.invoke(0f)
                 val text = firstResult(results)
                 if (text.isNullOrBlank()) onError?.invoke("没有识别到语音内容")
                 else onResult?.invoke(VoiceResult(text, isFinal = true))
@@ -53,6 +137,7 @@ class VoiceInputController(context: Context) {
 
             override fun onError(error: Int) {
                 setListening(false)
+                onLevel?.invoke(0f)
                 onError?.invoke(messageFor(error))
             }
 
@@ -60,8 +145,8 @@ class VoiceInputController(context: Context) {
         })
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "zh-CN")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, language)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         }
@@ -71,12 +156,27 @@ class VoiceInputController(context: Context) {
 
     fun stop() {
         if (!running) return
+        if (usingOffline) offline.stop() else recognizer?.stopListening()
         setListening(false)
-        recognizer?.stopListening()
+        if (!usingOffline) onLevel?.invoke(0f)
+    }
+
+    fun cancel() {
+        if (usingOffline) offline.cancel() else {
+            runCatching { recognizer?.cancel() }
+        }
+        setListening(false)
+        onLevel?.invoke(0f)
     }
 
     fun release() {
         setListening(false)
+        offline.onPartial = null
+        offline.onFinal = null
+        offline.onError = null
+        offline.onListeningChanged = null
+        offline.onLevel = null
+        offline.release()
         releaseRecognizer()
     }
 

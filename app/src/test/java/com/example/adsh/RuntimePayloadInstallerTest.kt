@@ -71,10 +71,33 @@ class RuntimePayloadInstallerTest {
     }
 
     @Test
+    fun restoresSonameAliasesFromLinksManifest() {
+        val data = payload(mapOf(
+            "runtime/bin/node" to "node",
+            "runtime/lib/libz.so.1.3.2" to "zlib",
+            "runtime/lib/LINKS.txt" to "libz.so.1\tlibz.so.1.3.2\n",
+            "dshroot/lib/node_modules/@deepseek-ai/dsh/lib/bin.js" to "dsh",
+            "dshhome/profiles/web/package.json" to "{}",
+        ))
+        val root = Files.createTempDirectory("adsh-runtime").toFile()
+        val installed = RuntimePayloadInstaller(root).install(data.inputStream(), sha(data))
+        val alias = installed.resolve("runtime/lib/libz.so.1")
+        assertTrue("缺少 soname 别名", alias.isFile)
+        assertEquals("zlib", alias.readText())
+    }
+
+    @Test
     fun releasePayloadMatchesPinnedDigestAndContainsRealHarness() {
+        // Only the repository-pinned reference runtime is covered here; local alternative payloads
+        // built with -PpayloadSha=... are verified on device instead.
+        org.junit.Assume.assumeTrue(
+            "当前构建使用了非默认 payload，跳过固定指纹校验",
+            BuildConfig.PAYLOAD_SHA256 ==
+                "6f5003bd7729135683460d9d85cb0c1b2673dbfea6584046a0de8d6968345fb7",
+        )
         val asset = File("src/main/assets/dsh/payload.zip")
         val installed = RuntimePayloadInstaller(temp.newFolder("release"))
-            .install(asset.inputStream(), "6f5003bd7729135683460d9d85cb0c1b2673dbfea6584046a0de8d6968345fb7")
+            .install(asset.inputStream(), BuildConfig.PAYLOAD_SHA256)
         assertTrue(installed.resolve("runtime/bin/node").canExecute())
         assertTrue(installed.resolve("dshroot/lib/node_modules/@deepseek-ai/dsh/package.json")
             .readText().contains("\"version\": \"0.2.1-rc.2\""))

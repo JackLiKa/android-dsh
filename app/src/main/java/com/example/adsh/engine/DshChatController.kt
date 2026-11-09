@@ -50,6 +50,7 @@ class DshChatController(
     private val cwdProvider: () -> String?,
     private val apiKeyProvider: suspend () -> String?,
     private val persistSession: suspend (String?) -> Unit,
+    private val fastModeProvider: () -> Boolean = { false },
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -445,7 +446,7 @@ class DshChatController(
                     it.copy(
                         provider = choice?.provider,
                         model = choice?.model,
-                        effort = pendingEffort ?: choice?.defaultEffort,
+                        effort = pendingEffort ?: effortFor(choice),
                     )
                 } else it
             }
@@ -454,6 +455,16 @@ class DshChatController(
         } catch (error: Exception) {
             _state.update { it.copy(error = "模型目录读取失败：${error.message}") }
         }
+    }
+
+    /** Quick mode picks the lowest advertised reasoning effort instead of the provider default. */
+    private fun effortFor(option: DshModelOption?): String? {
+        if (option == null) return null
+        if (!fastModeProvider()) return option.defaultEffort
+        val order = listOf("minimal", "low", "medium", "high", "max")
+        return option.efforts.minByOrNull { effort ->
+            order.indexOf(effort.id).let { if (it >= 0) it else order.size }
+        }?.id ?: option.defaultEffort
     }
 
     private fun refreshSessions(c: DshWebClient) {

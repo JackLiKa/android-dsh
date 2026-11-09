@@ -49,6 +49,30 @@
 | 问题卡片 | `ask_user_question` 弹出“Pick a Colour / Red or Blue?”；选择 Blue 并提交后，引擎向模型回传答案并继续回复。 |
 | 问题自定义回答 | 在“自定义回答”框输入 Green 并提交，引擎回传 `selected: []` + `custom: "Green"`，模型确认收到。 |
 
+## 模拟器离线语音验证（2026-11-08）
+
+环境：`Medium_Phone_API_37.0`（Android 17 / API 37、x86_64、1080×2400、WHPX 加速）；Gradle 8.9 + JDK 21；compileSdk 35；SDK `platforms;android-35` 与 `build-tools;35.0.0` 已安装。本工作区没有 `assets/dsh/payload.zip`（仓库不跟踪），因此 App 以 `-x checkRuntimePayload` 构建：debug APK 115,443,132 B（110.1 MiB，含 65 MiB Vosk 模型），dsh 引擎不可用；验证范围为离线语音与 UI 壳层。
+
+| 场景 | 结果与证据 |
+|---|---|
+| 构建 | `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest -x checkRuntimePayload` 通过；测试 APK 1,008,018 B |
+| App 启动 | `am start -n com.example.adsh/.MainActivity` 成功，`Displayed ... +4s201ms`；无 FATAL/ANR；UI 显示“引擎尚未启动 / 启动引擎”与 6 个底部 tab |
+| 语音模型打包 | instrumentation `bundledModelIsPackagedInApk` 通过（`assets/vosk/model-cn` 存在，`VoiceInputController.available()` 为真） |
+| 模型加载/幂等 | `loadsModelIntoPrivateStorageAndIsIdempotent` 通过；日志 `OfflineSpeechRecognizer: Vosk model loaded from /data/user/0/com.example.adsh/files/vosk/model-cn`，二次加载直接复用 |
+| 中文 WAV 解码 | `decodesBundledChineseWavToText` 通过；FunASR 示例音频（16 kHz/单声道/16 bit，5.547 s）识别为 `欢迎 大家 来 体验 打磨 远 推出 的 语音识别 模型`，产生 41 个部分结果；小模型把“达摩院”识别为“打磨远” |
+| 麦克风会话 | `microphoneSessionStartsAndStopsWithoutCrash` 通过（`AudioRecord` + Vosk `SpeechService` 启动 1.5 s 后停止，回调正常、无崩溃） |
+| 单元测试 | `:app:testDebugUnitTest -x checkRuntimePayload`：52 项中 51 通过；`RuntimePayloadInstallerTest.releasePayloadMatchesPinnedDigestAndContainsRealHarness` 因缺少 payload 失败（预期）；同时修复了 `WorkspaceStoreTest` 在 Windows 上路径分隔符断言失败的跨平台缺陷 |
+
+```sh
+adb -s emulator-5554 install -r -t app/build/outputs/apk/debug/app-debug.apk
+adb -s emulator-5554 install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb -s emulator-5554 shell pm grant com.example.adsh android.permission.RECORD_AUDIO
+adb -s emulator-5554 shell am instrument -w -r com.example.adsh.test/androidx.test.runner.AndroidJUnitRunner
+# 结果：OK (4 tests)
+```
+
+限制：模拟器是 x86_64，随附 payload 只含 arm64 Node ELF，引擎无法启动，因此没有执行“引擎就绪 + 点麦克风说话”的整条 UI 链路；该链路需真机或 arm64 环境补充验证。模型与选型细节见[离线语音识别](vosk-offline-speech.md)。
+
 ## 关键修复
 
 1. **回到前台消息缺失**：`DshChatController.resumeSession()` 在 `ON_START` 时强制重新 follow 当前会话，用快照校正后台期间丢失的事件。

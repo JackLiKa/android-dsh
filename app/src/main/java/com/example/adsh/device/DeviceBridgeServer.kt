@@ -175,6 +175,17 @@ class DeviceBridgeServer(
                     ?: throw DeviceCapabilities.BridgeFailure("需要 seconds")
                 DeviceCapabilities.setTimer(context, seconds, args["label"]?.toString())
             }
+            method == "GET" && path == "/actions/weather" -> {
+                val city = query["city"]?.takeIf { it.isNotBlank() }
+                    ?: throw DeviceCapabilities.BridgeFailure("需要 city")
+                WeatherService.current(city)
+            }
+            method == "POST" && path == "/actions/weather" -> {
+                val args = bodyObject(body)
+                val city = args["city"]?.toString()?.takeIf { it.isNotBlank() }
+                    ?: throw DeviceCapabilities.BridgeFailure("需要 city")
+                WeatherService.current(city)
+            }
             method == "POST" && path == "/actions/sms" -> {
                 val args = bodyObject(body)
                 val text = args["body"]?.toString()

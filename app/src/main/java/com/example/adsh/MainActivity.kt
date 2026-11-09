@@ -1,6 +1,8 @@
 package com.example.adsh
 
 import android.Manifest
+import android.app.Activity
+import android.app.role.RoleManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -122,6 +124,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == Intent.ACTION_ASSIST ||
+            intent.getBooleanExtra(EXTRA_VOICE_START, false)
+        ) {
+            voiceRequest.value += 1
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -130,7 +142,9 @@ class MainActivity : ComponentActivity() {
         val task = if (savedInstanceState == null) intent.getStringExtra("task").orEmpty() else ""
         val requestedProfile = intent.getStringExtra("profile")
         val showConfig = intent.getBooleanExtra("dump-config", false)
-        if (savedInstanceState == null && intent.getBooleanExtra(EXTRA_VOICE_START, false)) {
+        val launchedForVoice = intent.action == Intent.ACTION_ASSIST ||
+            intent.getBooleanExtra(EXTRA_VOICE_START, false)
+        if (savedInstanceState == null && launchedForVoice) {
             voiceRequest.value = 1
         }
         setContent {
@@ -188,14 +202,6 @@ class MainActivity : ComponentActivity() {
             Context.BIND_AUTO_CREATE,
         )
         engineBinder.value?.setForeground(true)
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        if (intent.getBooleanExtra(EXTRA_VOICE_START, false)) {
-            voiceRequest.value += 1
-        }
     }
 
     override fun onStop() {
@@ -277,9 +283,21 @@ private fun App(
     var remoteUrl by remember { mutableStateOf("") }
     var remoteInput by remember { mutableStateOf("") }
     var remoteError by remember { mutableStateOf<String?>(null) }
+    var speechLanguage by remember { mutableStateOf("zh-CN") }
+    var speechEngine by remember { mutableStateOf("auto") }
+    var fastThinking by remember { mutableStateOf(true) }
+    var homeWake by remember { mutableStateOf(true) }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val assistantRoleLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        status = context.getString(
+            if (result.resultCode == Activity.RESULT_OK) R.string.assistant_role_granted
+            else R.string.assistant_role_denied,
+        )
+    }
     val smsPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -303,6 +321,7 @@ private fun App(
                 if (sessionId == null) settings.clearSessionId()
                 else settings.setSessionId(sessionId)
             },
+            fastModeProvider = { fastThinking },
         )
     }
     DisposableEffect(controller) {
@@ -370,6 +389,10 @@ private fun App(
             savedSession = if (initialTask.isEmpty()) settings.sessionId() else null
             remoteUrl = settings.remoteEngineUrl().orEmpty()
             remoteInput = remoteUrl
+            speechLanguage = settings.speechLanguage()
+            speechEngine = settings.speechEngine()
+            fastThinking = settings.fastThinking()
+            homeWake = AdshAccessibilityService.isHomeWakeEnabled(context)
             settingsLoaded = true
             workspaceReady = true
         } catch (error: Exception) {
@@ -532,6 +555,8 @@ private fun App(
                     engineStatus = engineStatus,
                     initialPrompt = initialTask,
                     voiceRequest = voiceRequest,
+                    speechLanguage = speechLanguage,
+                    speechEngine = speechEngine,
                     onVoiceRequestHandled = onVoiceRequestHandled,
                     onStartEngine = startEngine,
                     onRetryEngine = startEngine,
@@ -1172,6 +1197,54 @@ private fun App(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(stringResource(R.string.home_wake_switch))
+                                        Text(
+                                            stringResource(R.string.home_wake_desc),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    Switch(
+                                        checked = homeWake,
+                                        onCheckedChange = { value ->
+                                            homeWake = value
+                                            AdshAccessibilityService.setHomeWakeEnabled(context, value)
+                                        },
+                                    )
+                                }
+                                Text(
+                                    stringResource(R.string.wake_assistant_hint),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                val roleManager = context.getSystemService(RoleManager::class.java)
+                                if (roleManager?.isRoleAvailable(RoleManager.ROLE_ASSISTANT) == true &&
+                                    roleManager != null
+                                ) {
+                                    TextButton(
+                                        onClick = {
+                                            if (roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
+                                                status = context.getString(R.string.assistant_role_already)
+                                            } else {
+                                                runCatching {
+                                                    assistantRoleLauncher.launch(
+                                                        roleManager.createRequestRoleIntent(
+                                                            RoleManager.ROLE_ASSISTANT,
+                                                        ),
+                                                    )
+                                                }.onFailure {
+                                                    status = context.getString(R.string.assistant_role_denied)
+                                                }
+                                            }
+                                        },
+                                    ) { Text(stringResource(R.string.wake_set_assistant)) }
+                                }
                                 if (!accessibilityOn) {
                                     Text(
                                         stringResource(R.string.wake_needs_accessibility),
@@ -1186,6 +1259,83 @@ private fun App(
                                         },
                                     ) { Text(stringResource(R.string.open_accessibility_settings)) }
                                 }
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(
+                                Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    stringResource(R.string.speech_section),
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text(
+                                    stringResource(R.string.speech_language),
+                                    style = MaterialTheme.typography.labelLarge,
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf(
+                                        "zh-CN" to R.string.speech_language_mandarin,
+                                        "zh-HK" to R.string.speech_language_cantonese,
+                                    ).forEach { (id, label) ->
+                                        FilterChip(
+                                            selected = speechLanguage == id,
+                                            onClick = {
+                                                speechLanguage = id
+                                                scope.launch { settings.setSpeechLanguage(id) }
+                                            },
+                                            label = { Text(stringResource(label)) },
+                                        )
+                                    }
+                                }
+                                Text(
+                                    stringResource(R.string.speech_engine),
+                                    style = MaterialTheme.typography.labelLarge,
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf(
+                                        "auto" to R.string.speech_engine_auto,
+                                        "offline" to R.string.speech_engine_offline,
+                                        "system" to R.string.speech_engine_system,
+                                    ).forEach { (id, label) ->
+                                        FilterChip(
+                                            selected = speechEngine == id,
+                                            onClick = {
+                                                speechEngine = id
+                                                scope.launch { settings.setSpeechEngine(id) }
+                                            },
+                                            label = { Text(stringResource(label)) },
+                                        )
+                                    }
+                                }
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(stringResource(R.string.fast_thinking))
+                                        Text(
+                                            stringResource(R.string.fast_thinking_desc),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    Switch(
+                                        checked = fastThinking,
+                                        onCheckedChange = { value ->
+                                            fastThinking = value
+                                            scope.launch { settings.setFastThinking(value) }
+                                        },
+                                    )
+                                }
+                                Text(
+                                    stringResource(R.string.speech_hint),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
                         }
                         Spacer(Modifier.height(12.dp))

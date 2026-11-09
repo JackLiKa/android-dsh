@@ -29,6 +29,8 @@ const INSTRUCTIONS = [
   '通知可能包含隐私信息，只在用户要求时读取。',
   '不要执行不可逆或影响他人的操作（支付、删除、发消息、拨号等），除非用户在当前对话中明确要求或确认。',
   '自动化动作（闹钟、计时器、短信预填、拨号）会打开对应的系统应用并交由用户确认；send_sms 仅在用户明确要求发送短信时直接发送并等待发送回执，compose_sms 只预填不发送。部分系统会在 send_sms 时再弹一次发送确认，需要在手机上点“发送”，否则系统会取消该次发送。',
+  '意图明确时直接调用工具：闹钟 set_alarm、计时器 set_timer、天气 get_weather、打开应用 app_open、短信 send_sms（仅明确要求发送时）。不要先解释计划或反复确认，一次工具调用能完成就只调用一次。',
+  '简单问题（天气、时间、设备状态、单步操作）只给简短结论，推理链保持最短；缺少城市、联系人等关键信息时只问一个问题。',
 ].join('\n')
 
 const TOOLS = [
@@ -195,6 +197,21 @@ const TOOLS = [
       additionalProperties: false,
     },
     annotations: { destructiveHint: true },
+  },
+  {
+    name: 'get_weather',
+    title: '查询天气',
+    description:
+      '直接查询指定城市当前天气与未来三天预报（Open-Meteo，无需 API Key），一次调用返回温度、体感、湿度、风、天气状况和降水概率。用户问天气时直接调用本工具，不要先做多步规划。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        city: { type: 'string', description: '城市名称，例如 北京、上海、广州、深圳；可用中文。' },
+      },
+      required: ['city'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
   },
   {
     name: 'dial_number',
@@ -383,6 +400,8 @@ async function callTool(name, args) {
         return textResult(await bridge('/actions/alarm', args))
       case 'set_timer':
         return textResult(await bridge('/actions/timer', args))
+      case 'get_weather':
+        return textResult(JSON.stringify(await bridge('/actions/weather', args), null, 2))
       case 'compose_sms':
         return textResult(await bridge('/actions/sms', args))
       case 'send_sms':

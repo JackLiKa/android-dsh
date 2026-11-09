@@ -28,6 +28,9 @@ class SecureSettings(private val context: Context) {
     private val themeModeKey = stringPreferencesKey("theme_mode")
     private val accentColorKey = stringPreferencesKey("accent_color")
     private val remoteEngineKey = stringPreferencesKey("remote_engine_url")
+    private val speechLanguageKey = stringPreferencesKey("speech_language")
+    private val speechEngineKey = stringPreferencesKey("speech_engine")
+    private val fastThinkingKey = stringPreferencesKey("fast_thinking")
 
     private fun key(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -93,6 +96,28 @@ class SecureSettings(private val context: Context) {
 
     suspend fun setAccentColor(value: String) {
         context.dataStore.edit { it[accentColorKey] = value }
+    }
+
+    suspend fun speechLanguage(): String =
+        context.dataStore.data.first()[speechLanguageKey] ?: "zh-CN"
+
+    suspend fun setSpeechLanguage(value: String) {
+        context.dataStore.edit { it[speechLanguageKey] = value }
+    }
+
+    suspend fun speechEngine(): String =
+        context.dataStore.data.first()[speechEngineKey] ?: "auto"
+
+    suspend fun setSpeechEngine(value: String) {
+        context.dataStore.edit { it[speechEngineKey] = value }
+    }
+
+    /** Low reasoning effort for short device actions and quick questions. */
+    suspend fun fastThinking(): Boolean =
+        context.dataStore.data.first()[fastThinkingKey] != "false"
+
+    suspend fun setFastThinking(value: Boolean) {
+        context.dataStore.edit { it[fastThinkingKey] = value.toString() }
     }
 
     suspend fun saveRemoteEngineUrl(value: String?) {

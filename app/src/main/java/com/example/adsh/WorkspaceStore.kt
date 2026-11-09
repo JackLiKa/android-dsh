@@ -9,6 +9,17 @@ data class WorkspaceRef(val id: String, val name: String, val directory: File)
 class WorkspaceStore(private val root: File) {
     companion object {
         const val DEFAULT_ID = "default"
+
+        private val ASSISTANT_GUIDE = """
+            # 助手行为约定
+
+            - 用户意图明确时立即执行，不要先讲计划，也不要反复确认。
+            - 闹钟用 set_alarm，计时器用 set_timer，打开应用用 app_open，查天气用 get_weather。
+            - 短信：只有用户明确要求发送时才调用 send_sms，并报告发送成功或失败。
+            - 简单问题（天气、时间、设备状态、单步操作）只给简短结论，推理过程保持最少。
+            - 缺少必要信息时只问一个最关键的问题，例如城市、联系人或具体时间。
+            - 回复先给结论，再给必要细节；较长内容分段输出，避免大段文字。
+        """.trimIndent()
     }
 
     fun isValidName(value: String): Boolean {
@@ -47,6 +58,7 @@ class WorkspaceStore(private val root: File) {
         if (id == DEFAULT_ID) ensureDefault()
         val directory = root.resolve(id)
         require(directory.isDirectory) { "工作区不存在：$id" }
+        writeAssistantGuide(directory)
         return WorkspaceRef(id, readName(directory), directory)
     }
 
@@ -58,6 +70,13 @@ class WorkspaceStore(private val root: File) {
         val directory = root.resolve(DEFAULT_ID)
         check(directory.mkdirs() || directory.isDirectory) { "无法创建默认工作区" }
         if (!directory.resolve("name.txt").exists()) writeName(directory, "默认工作区")
+    }
+
+    /** Seeds an AGENTS.md once; an existing user-authored file is never overwritten. */
+    private fun writeAssistantGuide(directory: File) {
+        val file = directory.resolve("AGENTS.md")
+        if (file.exists()) return
+        runCatching { file.writeText(ASSISTANT_GUIDE, Charsets.UTF_8) }
     }
 
     private fun writeName(directory: File, name: String) {
