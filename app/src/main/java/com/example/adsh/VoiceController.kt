@@ -15,8 +15,9 @@ data class VoiceResult(val text: String, val isFinal: Boolean)
  * Voice input facade; callbacks fire on the main thread.
  *
  * Engine selection:
- * - `auto` prefers the system recognizer when present (usually more accurate and supports
- *   Cantonese), and falls back to the bundled Vosk Mandarin model.
+ * - `auto` prefers the bundled sherpa-onnx streaming model for Mandarin (local, low latency),
+ *   falls back to the platform recognizer and then the Vosk model.
+ * - `sherpa` forces the bundled enhanced model (Mandarin only).
  * - `offline` forces the bundled Vosk model (Mandarin only).
  * - `system` forces the platform recognizer (Mandarin or Cantonese).
  */
@@ -25,13 +26,14 @@ class VoiceInputController(
     private val languageProvider: () -> String = { "zh-CN" },
     private val engineProvider: () -> String = { "auto" },
 ) {
-    private enum class Engine { OFFLINE, SYSTEM, NONE }
+    private enum class Engine { SHERPA, OFFLINE, SYSTEM, NONE }
 
     private val appContext = context.applicationContext
+    private val sherpa = SherpaSpeechRecognizer(appContext)
     private val offline = OfflineSpeechRecognizer(appContext)
     private var recognizer: SpeechRecognizer? = null
     private var running = false
-    private var usingOffline = false
+    private var active = Engine.NONE
 
     var onResult: ((VoiceResult) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
@@ -48,11 +50,16 @@ class VoiceInputController(
     private fun resolveEngine(): Engine {
         val preference = engineProvider()
         val system = SpeechRecognizer.isRecognitionAvailable(appContext)
-        val offlineReady = offline.assetsInstalled() && language() == "zh-CN"
+        val mandarin = language() == "zh-CN"
+        val sherpaReady = mandarin && sherpa.assetsInstalled()
+        val offlineReady = mandarin && offline.assetsInstalled()
         return when {
+            preference == "sherpa" && sherpaReady -> Engine.SHERPA
             preference == "offline" && offlineReady -> Engine.OFFLINE
             preference == "system" && system -> Engine.SYSTEM
+            preference == "auto" && sherpaReady -> Engine.SHERPA
             preference == "auto" && system -> Engine.SYSTEM
+            sherpaReady -> Engine.SHERPA
             offlineReady -> Engine.OFFLINE
             system -> Engine.SYSTEM
             else -> Engine.NONE
@@ -62,12 +69,17 @@ class VoiceInputController(
     /** True when the selected language/engine combination can recognize speech. */
     fun available(): Boolean = resolveEngine() != Engine.NONE
 
-    /** True when the current/last session used the offline engine (diagnostics). */
-    fun usingOfflineEngine(): Boolean = usingOffline
+    /** True when the current/last session used the Vosk engine (diagnostics). */
+    fun usingOfflineEngine(): Boolean = active == Engine.OFFLINE
 
     fun isListening(): Boolean = running
 
-    fun start() {
+    /** Warm up the enhanced model in the background so the first hold-to-talk is responsive. */
+    fun prepare() {
+        if (resolveEngine() == Engine.SHERPA) sherpa.prepare()
+    }
+
+    fun start(autoStop: Boolean = false) {
         when (resolveEngine()) {
             Engine.NONE -> {
                 onError?.invoke(
@@ -79,14 +91,38 @@ class VoiceInputController(
                 )
                 return
             }
+            Engine.SHERPA -> startSherpa(autoStop)
             Engine.OFFLINE -> startOffline()
             Engine.SYSTEM -> startSystem()
         }
     }
 
+    private fun startSherpa(autoStop: Boolean) {
+        releaseRecognizer()
+        active = Engine.SHERPA
+        sherpa.onListeningChanged = { listening -> setListening(listening) }
+        sherpa.onPartial = { text ->
+            if (text.isNotBlank()) onResult?.invoke(VoiceResult(text, isFinal = false))
+        }
+        sherpa.onFinal = { text ->
+            setListening(false)
+            onLevel?.invoke(0f)
+            if (text.isBlank()) onError?.invoke("没有识别到语音内容")
+            else onResult?.invoke(VoiceResult(text, isFinal = true))
+        }
+        sherpa.onError = { message ->
+            setListening(false)
+            onLevel?.invoke(0f)
+            onError?.invoke(message)
+        }
+        sherpa.onLevel = { level -> onLevel?.invoke(level) }
+        setListening(true)
+        sherpa.start(autoStop)
+    }
+
     private fun startOffline() {
         releaseRecognizer()
-        usingOffline = true
+        active = Engine.OFFLINE
         offline.onListeningChanged = { listening -> setListening(listening) }
         offline.onPartial = { text ->
             if (text.isNotBlank()) onResult?.invoke(VoiceResult(text, isFinal = false))
@@ -109,7 +145,7 @@ class VoiceInputController(
 
     private fun startSystem() {
         releaseRecognizer()
-        usingOffline = false
+        active = Engine.SYSTEM
         val language = language()
         val created = SpeechRecognizer.createSpeechRecognizer(appContext)
         recognizer = created
@@ -156,14 +192,22 @@ class VoiceInputController(
 
     fun stop() {
         if (!running) return
-        if (usingOffline) offline.stop() else recognizer?.stopListening()
+        when (active) {
+            Engine.SHERPA -> sherpa.stop()
+            Engine.OFFLINE -> offline.stop()
+            Engine.SYSTEM -> recognizer?.stopListening()
+            Engine.NONE -> Unit
+        }
         setListening(false)
-        if (!usingOffline) onLevel?.invoke(0f)
+        onLevel?.invoke(0f)
     }
 
     fun cancel() {
-        if (usingOffline) offline.cancel() else {
-            runCatching { recognizer?.cancel() }
+        when (active) {
+            Engine.SHERPA -> sherpa.cancel()
+            Engine.OFFLINE -> offline.cancel()
+            Engine.SYSTEM -> runCatching { recognizer?.cancel() }
+            Engine.NONE -> Unit
         }
         setListening(false)
         onLevel?.invoke(0f)
@@ -171,6 +215,12 @@ class VoiceInputController(
 
     fun release() {
         setListening(false)
+        sherpa.onPartial = null
+        sherpa.onFinal = null
+        sherpa.onError = null
+        sherpa.onListeningChanged = null
+        sherpa.onLevel = null
+        sherpa.release()
         offline.onPartial = null
         offline.onFinal = null
         offline.onError = null

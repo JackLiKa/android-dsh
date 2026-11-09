@@ -20,6 +20,8 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // The bundled Node runtime is arm64-only; keep the APK from carrying unused ABI copies.
+        ndk { abiFilters += "arm64-v8a" }
         buildConfigField("String", "PAYLOAD_SHA256", "\"$payloadSha\"")
         // 75 s for phones; raise locally (e.g. -PstartupTimeoutMs=300000) when running the
         // arm64 runtime through the x86_64 emulator's ARM translation, which boots much slower.
@@ -39,6 +41,11 @@ android {
         buildConfig = true
     }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    androidResources {
+        // sherpa-onnx reads model/token assets through AAsset_getBuffer, which only works for
+        // uncompressed assets. Keeping them stored also avoids decompressing 230 MB on every load.
+        noCompress += listOf("onnx", "txt")
+    }
     lint {
         // targetSdk 28 是运行时 Node ELF 可在应用私有目录执行的前提，无法提高到 Play 要求。
         disable += "ExpiredTargetSdkVersion"
@@ -63,6 +70,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // Offline Chinese speech recognition (Apache-2.0). Model lives in assets/vosk/model-cn.
     implementation("com.alphacephei:vosk-android:0.3.47")
+    // Streaming Zipformer + Silero VAD + CT-Transformer punctuation (Apache-2.0). The AAR is
+    // fetched by tools/fetch_sherpa_models.py; assets live in assets/sherpa.
+    implementation(files("libs/sherpa-onnx-2.0.1.aar"))
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")

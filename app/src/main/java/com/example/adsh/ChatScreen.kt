@@ -258,6 +258,10 @@ fun ChatScreen(
         }
     }
 
+    LaunchedEffect(voice) {
+        voice.prepare()
+    }
+
     DisposableEffect(voice) {
         voice.onListeningChanged = { active ->
             listening = active

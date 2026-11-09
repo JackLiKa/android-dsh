@@ -20,3 +20,10 @@ app/src/main/assets/dsh/*.zip
 app/src/main/assets/vosk/
 runtime/previous/*.zip
 runtime/previous/*.apk
+
+# Offline sherpa-onnx stack (AAR + ~232 MiB models): run tools/fetch_sherpa_models.py first.
+# hotwords.txt stays tracked; only the model binaries are fetched.
+app/libs/*.aar
+app/src/main/assets/sherpa/model/
+app/src/main/assets/sherpa/vad/
+app/src/main/assets/sherpa/punct/

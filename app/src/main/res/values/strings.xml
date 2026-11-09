@@ -238,9 +238,10 @@
     <string name="speech_language_cantonese">粤语</string>
     <string name="speech_engine">识别引擎</string>
     <string name="speech_engine_auto">自动</string>
-    <string name="speech_engine_offline">离线</string>
+    <string name="speech_engine_sherpa">本地增强</string>
+    <string name="speech_engine_offline">Vosk 离线</string>
     <string name="speech_engine_system">系统</string>
-    <string name="speech_hint">长按麦克风说话，松开结束。识别结果会写入输入框，可先编辑再发送。离线模型仅支持普通话；粤语需要系统语音服务。</string>
+    <string name="speech_hint">长按麦克风说话，松开结束。识别结果会写入输入框，可先编辑再发送。本地增强使用流式模型，支持普通话、实时上屏与自动标点；Vosk 离线仅支持普通话；粤语需要系统语音服务。</string>
     <string name="fast_thinking">快速响应</string>
     <string name="fast_thinking_desc">简单任务直接执行，使用最低推理强度</string>
     <string name="home_wake_switch">主屏幕键长按 3 秒唤醒</string>

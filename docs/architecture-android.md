@@ -86,7 +86,9 @@ MCP 子进程环境会清除凭据型变量与 `DSH_*`，设备桥 token 只通�
 
 ## 语音、唤醒与自动化
 
-- `OfflineSpeechRecognizer.kt` 封装 Vosk 离线中文识别：首次把 `assets/vosk/model-cn`（`vosk-model-small-cn-0.22`，65 MiB）复制到 `filesDir/vosk/model-cn` 并加载 `Model`，用 `SpeechService` + `AudioRecord` 流式识别，`onPartialResult` 映射部分结果、`onFinalResult` 触发长按直发；`decodePcm()` 供 instrumentation 直接解码 WAV。`VoiceInputController` 优先走离线引擎，模型缺失时回退系统 `SpeechRecognizer`；TTS 仍由 `ReplySpeaker` 负责（按助手消息去重，只朗读已完成的回复）。选型与验证见[离线语音识别](vosk-offline-speech.md)。
+- `SherpaSpeechRecognizer.kt` 是默认的普通话引擎：sherpa-onnx 流式 Zipformer（int8，`assets/sherpa/model`）逐 100 ms 出部分结果，Silero VAD 负责免按住端点，CT-Transformer 只对最终文本加标点；热词按行传入 `createStream`，加载时按 `tokens.txt` 过滤含未登录字的行。模型直接从 assets 映射（`noCompress` 保证 `Stored`），不复制到私有目录。`decodePcm()` 供 instrumentation 直接解码 WAV。
+- `OfflineSpeechRecognizer.kt` 保留 Vosk 回退：首次把 `assets/vosk/model-cn`（`vosk-model-small-cn-0.22`，65 MiB）复制到 `filesDir/vosk/model-cn` 并加载 `Model`，用 `AudioRecord` 直录并流式识别；`decodePcm()` 同样供测试使用。
+- `VoiceInputController` 统一三种引擎与回调：普通话且资产齐全时“自动”走 sherpa，否则系统 `SpeechRecognizer`，再否则 Vosk；粤语只走系统。进入对话页会后台 `prepare()` 预热模型。TTS 仍由 `ReplySpeaker` 负责（按助手消息去重，只朗读已完成的回复）。细节见[本地增强语音识别](sherpa-offline-speech.md)与[离线语音识别](vosk-offline-speech.md)。
 - `AdshAccessibilityService` 额外维护可选的悬浮球：`TYPE_ACCESSIBILITY_OVERLAY` 不需要悬浮窗权限，轻点通过 `MainActivity.EXTRA_VOICE_START` 打开对话并发起语音，长按只打开对话，拖动位置写入 `adsh_wake` 偏好。
 - `AutomationStore` 用 SharedPreferences 保存一键任务；`AutomationScreen` 负责创建、删除与执行，执行即把任务内容发送给当前引擎。
 - 远程引擎：`SecureSettings` 用 AndroidKeyStore 加密保存电脑端 `dsh web` 的 token 地址；`DshChatController.attach` 与本地引擎共用同一 HTTP/WebSocket 客户端。启用远程地址后本机引擎可保持停止。
@@ -116,9 +118,11 @@ MCP 子进程环境会清除凭据型变量与 `DSH_*`，设备桥 token 只通�
 | `engine/EngineLogStore.kt`、`EngineCrash.kt` | 日志持久化与崩溃归因 |
 | `engine/EngineRestartPolicy.kt`、`EngineIdlePolicy.kt` | 重启与空闲策略 |
 | `device/*` | broker、MCP patch、无障碍/通知服务、悬浮球、审计 |
-| `VoiceController.kt` | 语音门面：`VoiceInputController`（离线 Vosk 优先、系统识别回退）与 `ReplySpeaker`（TTS 播报） |
+| `VoiceController.kt` | 语音门面：`VoiceInputController`（sherpa 优先、系统与 Vosk 回退）与 `ReplySpeaker`（TTS 播报） |
+| `SherpaSpeechRecognizer.kt` | sherpa-onnx 流式模型加载/录音会话/VAD/热词/标点、`decodePcm()` 测试入口 |
 | `OfflineSpeechRecognizer.kt` | Vosk 模型加载/录音会话/部分结果与最终结果、`decodePcm()` 测试入口 |
-| `assets/vosk/model-cn/` | 随附中文模型（gitignore，`tools/fetch_vosk_model.py` 生成） |
+| `assets/sherpa/` | 流式 Zipformer、Silero VAD、标点模型与热词（模型 gitignore，`tools/fetch_sherpa_models.py` 生成） |
+| `assets/vosk/model-cn/` | Vosk 中文模型（gitignore，`tools/fetch_vosk_model.py` 生成） |
 | `AutomationStore.kt`、`AutomationScreen.kt` | 一键任务存储与自动化页面 |
 | `ui/Theme.kt` | 主题、字体、形状 |
 | `assets/dsh-bridge/mcp-server.mjs` | 零依赖 MCP stdio server |

@@ -1,0 +1,32 @@
+# One phrase per line. Only characters present in sherpa/model/tokens.txt are usable;
+# the recognizer silently filters lines containing unknown characters.
+深度求索
+人工智能
+大模型
+语音助手
+小助手
+广州
+北京
+上海
+成都
+重庆
+微信
+支付宝
+高德地图
+百度地图
+网易云音乐
+京东
+美团
+饿了么
+天气预报
+空气质量
+蓝牙
+飞行模式
+移动数据
+无线网络
+相机
+闹钟
+提醒
+导航
+打电话
+发短信

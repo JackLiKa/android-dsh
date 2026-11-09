@@ -1294,20 +1294,25 @@ private fun App(
                                     stringResource(R.string.speech_engine),
                                     style = MaterialTheme.typography.labelLarge,
                                 )
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     listOf(
                                         "auto" to R.string.speech_engine_auto,
+                                        "sherpa" to R.string.speech_engine_sherpa,
                                         "offline" to R.string.speech_engine_offline,
                                         "system" to R.string.speech_engine_system,
-                                    ).forEach { (id, label) ->
-                                        FilterChip(
-                                            selected = speechEngine == id,
-                                            onClick = {
-                                                speechEngine = id
-                                                scope.launch { settings.setSpeechEngine(id) }
-                                            },
-                                            label = { Text(stringResource(label)) },
-                                        )
+                                    ).chunked(2).forEach { row ->
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            row.forEach { (id, label) ->
+                                                FilterChip(
+                                                    selected = speechEngine == id,
+                                                    onClick = {
+                                                        speechEngine = id
+                                                        scope.launch { settings.setSpeechEngine(id) }
+                                                    },
+                                                    label = { Text(stringResource(label)) },
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                                 Row(
