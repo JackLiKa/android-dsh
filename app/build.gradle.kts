@@ -24,12 +24,6 @@ android {
     buildFeatures { compose = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     lint {
-        // 新版 androidx lint 检查器与 AGP 8.7 自带的 Kotlin 分析 API 不兼容（ICCE），
-        // 属于 lint/依赖自身的崩溃而非工程代码问题；仅禁用会崩溃的检查，其余保持开启。
-        disable += "NullSafeMutableLiveData"
-        disable += "FlowOperatorInvokedInComposition"
-        disable += "UnrememberedMutableState"
-        disable += "RememberInComposition"
         // targetSdk 28 是运行时 Node ELF 可在应用私有目录执行的前提，无法提高到 Play 要求。
         disable += "ExpiredTargetSdkVersion"
         abortOnError = true
@@ -38,13 +32,16 @@ android {
 }
 
 dependencies {
-    implementation(platform("androidx.compose:compose-bom:2026.06.01"))
+    // Keep the Compose BOM on the same generation as Kotlin 2.0.21 / AGP 8.7.3. Newer BOMs ship
+    // lint checks compiled against a newer Kotlin Analysis API, which crashes AGP 8.7 lint.
+    implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core:1.7.8")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
+    // 2.9.x pulls compose-runtime 1.9, whose bundled lint checks crash AGP 8.7 lint.
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("org.yaml:snakeyaml:2.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

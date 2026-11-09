@@ -207,4 +207,22 @@
     <string name="remote_connected">已连接远程引擎</string>
     <string name="remote_connecting">正在连接远程引擎…</string>
     <string name="remote_security_note">地址含访问令牌，敏感信息只保存在本机加密存储中。局域网外使用时请优先通过 HTTPS 隧道访问。</string>
+    <string name="accent_section">主题色</string>
+    <string name="accent_blue">经典蓝</string>
+    <string name="accent_teal">青绿</string>
+    <string name="accent_purple">紫罗兰</string>
+    <string name="accent_orange">琥珀橙</string>
+    <string name="accent_rose">玫红</string>
+    <string name="accent_green">森林绿</string>
+    <string name="copy_message">复制消息</string>
+    <string name="share_message">分享消息</string>
+    <string name="message_copied">已复制到剪贴板</string>
+    <string name="copy_code">复制</string>
+    <string name="code_copied">代码已复制</string>
+    <string name="streaming_elapsed">生成中 · %1$d 秒</string>
+    <string name="streaming_chars">%1$d 字</string>
+    <string name="queued_message">已排队，本轮结束后自动发送</string>
+    <string name="queued_cancel">取消排队</string>
+    <string name="composer_queue_hint">生成中也可以继续输入，本轮结束后自动发送</string>
+    <string name="empty_engine_hint">引擎就绪后即可对话、调用设备工具与插件。</string>
 </resources>

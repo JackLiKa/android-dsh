@@ -2,9 +2,11 @@ package com.example.adsh
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.speech.RecognizerIntent
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,6 +44,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -68,9 +72,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
@@ -89,6 +96,7 @@ import com.example.adsh.engine.DshQuestionRequest
 import com.example.adsh.engine.DshSessionSummary
 import com.example.adsh.engine.DshStreaming
 import com.example.adsh.engine.DshToolCall
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -116,6 +124,7 @@ fun ChatScreen(
     var prompt by remember { mutableStateOf(initialPrompt) }
     var autoSent by rememberSaveable(initialPrompt) { mutableStateOf(false) }
     var showModels by remember { mutableStateOf(false) }
+    var queued by rememberSaveable { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val itemCount = state.messages.size +
         (if (state.optimisticUser != null) 1 else 0) +
@@ -130,6 +139,15 @@ fun ChatScreen(
             autoSent = true
             prompt = ""
             onSend(initialPrompt)
+        }
+    }
+
+    LaunchedEffect(state.running) {
+        if (!state.running) {
+            queued?.let { text ->
+                queued = null
+                onSend(text)
+            }
         }
     }
 
@@ -265,17 +283,44 @@ fun ChatScreen(
     }
 
     Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 6.dp),
         ) {
-            Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     state.title?.takeIf { it.isNotBlank() } ?: stringResource(R.string.chat_new_title),
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
+                IconButton(
+                    onClick = {
+                        speakReplies = !speakReplies
+                        if (!speakReplies) speaker.stop()
+                    },
+                ) {
+                    Icon(
+                        painter = painterResource(
+                            if (speakReplies) R.drawable.ic_volume_up else R.drawable.ic_volume_off,
+                        ),
+                        contentDescription = stringResource(
+                            if (speakReplies) R.string.speak_reply_on else R.string.speak_reply_off,
+                        ),
+                        tint = if (speakReplies) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IconButton(onClick = {
+                    queued = null
+                    onNewSession()
+                }) {
+                    Icon(Icons.Default.Add, contentDescription = stringResource(R.string.new_session))
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     state.connection,
                     style = MaterialTheme.typography.labelSmall,
@@ -283,35 +328,38 @@ fun ChatScreen(
                     else MaterialTheme.colorScheme.error,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
-            }
-            TextButton(onClick = { showModels = true }, enabled = catalog != null) {
-                Text(
-                    state.selectedLabel(catalog),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 156.dp),
-                )
-            }
-            IconButton(
-                onClick = {
-                    speakReplies = !speakReplies
-                    if (!speakReplies) speaker.stop()
-                },
-            ) {
-                Icon(
-                    painter = painterResource(
-                        if (speakReplies) R.drawable.ic_volume_up else R.drawable.ic_volume_off,
-                    ),
-                    contentDescription = stringResource(
-                        if (speakReplies) R.string.speak_reply_on else R.string.speak_reply_off,
-                    ),
-                    tint = if (speakReplies) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            IconButton(onClick = onNewSession) {
-                Icon(Icons.Default.Add, contentDescription = stringResource(R.string.new_session))
+                Spacer(Modifier.width(8.dp))
+                Surface(
+                    onClick = { showModels = true },
+                    enabled = catalog != null,
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (state.engineReady) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.error,
+                                ),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            state.selectedLabel(catalog),
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 150.dp),
+                        )
+                    }
+                }
             }
         }
         HorizontalDivider()
@@ -417,7 +465,7 @@ fun ChatScreen(
                 val text = prompt.trim()
                 if (text.isNotEmpty()) {
                     prompt = ""
-                    onSend(text)
+                    if (state.running) queued = text else onSend(text)
                 }
             },
             onStop = onCancel,
@@ -429,6 +477,8 @@ fun ChatScreen(
             onVoiceLong = {
                 if (!listening && state.engineReady) beginVoice(true)
             },
+            queuedText = queued,
+            onCancelQueued = { queued = null },
         )
     }
 }
@@ -462,27 +512,30 @@ private fun EmptyChat(
                 shape = RoundedCornerShape(20.dp),
             ) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    val statusTitle = when (engineStatus.phase) {
+                        EngineStatus.Phase.STARTING -> stringResource(R.string.engine_starting)
+                        EngineStatus.Phase.FAILED -> stringResource(R.string.engine_failed)
+                        EngineStatus.Phase.IDLE,
+                        EngineStatus.Phase.STOPPED -> stringResource(R.string.engine_idle)
+                        else -> state.connection
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (state.connecting || engineStatus.phase == EngineStatus.Phase.STARTING) {
                             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                             Spacer(Modifier.width(10.dp))
                         }
                         Text(
-                            when (engineStatus.phase) {
-                                EngineStatus.Phase.STARTING -> stringResource(R.string.engine_starting)
-                                EngineStatus.Phase.FAILED -> stringResource(R.string.engine_failed)
-                                EngineStatus.Phase.IDLE,
-                                EngineStatus.Phase.STOPPED -> stringResource(R.string.engine_idle)
-                                else -> state.connection
-                            },
+                            statusTitle,
                             style = MaterialTheme.typography.titleSmall,
                         )
                     }
-                    Text(
-                        engineStatus.message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    if (engineStatus.message.isNotBlank() && engineStatus.message != statusTitle) {
+                        Text(
+                            engineStatus.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     when (engineStatus.phase) {
                         EngineStatus.Phase.IDLE, EngineStatus.Phase.STOPPED -> Button(onClick = onStartEngine) {
                             Text(stringResource(R.string.engine_start))
@@ -510,13 +563,36 @@ private fun EmptyChat(
             }
             Spacer(Modifier.height(24.dp))
         }
+            Box(
+                Modifier
+                    .size(64.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                MaterialTheme.colorScheme.primary,
+                                MaterialTheme.colorScheme.secondary,
+                            ),
+                        ),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "深",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                )
+            }
+            Spacer(Modifier.height(18.dp))
             Text(
                 stringResource(R.string.chat_empty_title),
                 style = MaterialTheme.typography.headlineSmall,
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                stringResource(R.string.chat_empty_hint),
+                stringResource(
+                    if (state.engineReady) R.string.chat_empty_hint else R.string.empty_engine_hint,
+                ),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -612,7 +688,9 @@ private fun MessageBubble(message: DshChatMessage) {
                     }
                 }
                 if (message.text.isNotBlank()) {
-                    SelectionContainer { Text(message.text) }
+                    MarkdownText(message.text, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(2.dp))
+                    MessageActions(message.text)
                 } else if (message.tools.isEmpty()) {
                     Text(
                         stringResource(R.string.assistant_empty),
@@ -654,6 +732,63 @@ private fun UserBubble(text: String) {
 }
 
 @Composable
+private fun MessageActions(text: String) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(
+            onClick = {
+                clipboard.setText(AnnotatedString(text))
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.message_copied),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            },
+            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+        ) {
+            Icon(
+                painterResource(R.drawable.ic_content_copy),
+                contentDescription = stringResource(R.string.copy_message),
+                modifier = Modifier.size(14.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                stringResource(R.string.copy_message),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        TextButton(
+            onClick = {
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, text)
+                }
+                context.startActivity(
+                    Intent.createChooser(intent, context.getString(R.string.share_message)),
+                )
+            },
+            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+        ) {
+            Icon(
+                Icons.Default.Share,
+                contentDescription = stringResource(R.string.share_message),
+                modifier = Modifier.size(14.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                stringResource(R.string.share_message),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
 private fun CommandBubble(command: DshCommandInfo) {
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -687,6 +822,13 @@ private fun CommandBubble(command: DshCommandInfo) {
 
 @Composable
 private fun StreamingBubble(stream: DshStreaming) {
+    var seconds by remember(stream.attemptId) { mutableStateOf(0) }
+    LaunchedEffect(stream.attemptId) {
+        while (true) {
+            delay(1000)
+            seconds += 1
+        }
+    }
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -705,7 +847,7 @@ private fun StreamingBubble(stream: DshStreaming) {
                 Spacer(Modifier.height(8.dp))
             }
             if (stream.text.isNotBlank()) {
-                Text(stream.text)
+                MarkdownText(stream.text, modifier = Modifier.fillMaxWidth())
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
@@ -718,6 +860,22 @@ private fun StreamingBubble(stream: DshStreaming) {
                 }
             }
             Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.streaming_elapsed, seconds),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                if (stream.text.isNotBlank()) {
+                    Text(
+                        stringResource(R.string.streaming_chars, stream.text.length),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
             LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
         }
     }
@@ -849,9 +1007,41 @@ private fun Composer(
     listening: Boolean,
     onVoice: () -> Unit,
     onVoiceLong: () -> Unit,
+    queuedText: String?,
+    onCancelQueued: () -> Unit,
 ) {
     Surface(tonalElevation = 3.dp) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            queuedText?.let { text ->
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                ) {
+                    Row(
+                        Modifier.padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                stringResource(R.string.queued_message),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                            Text(
+                                text,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        TextButton(onClick = onCancelQueued) {
+                            Text(stringResource(R.string.queued_cancel))
+                        }
+                    }
+                }
+            }
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Bottom,
@@ -889,20 +1079,38 @@ private fun Composer(
                     shape = RoundedCornerShape(24.dp),
                 )
                 if (running) {
-                    OutlinedButton(onClick = onStop) {
-                        Icon(Icons.Default.Close, contentDescription = null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(stringResource(R.string.stop))
+                    OutlinedButton(
+                        onClick = onStop,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = stringResource(R.string.stop),
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    Button(onClick = onSend, enabled = enabled && value.isNotBlank()) {
+                        Icon(
+                            Icons.Default.Send,
+                            contentDescription = stringResource(R.string.send),
+                            modifier = Modifier.size(18.dp),
+                        )
                     }
                 } else {
                     Button(onClick = onSend, enabled = enabled && value.isNotBlank()) {
-                        Icon(Icons.Default.Send, contentDescription = null, Modifier.size(18.dp))
+                        Icon(
+                            Icons.Default.Send,
+                            contentDescription = stringResource(R.string.send),
+                            modifier = Modifier.size(18.dp),
+                        )
                     }
                 }
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                stringResource(R.string.composer_scope),
+                stringResource(
+                    if (running) R.string.composer_queue_hint else R.string.composer_scope,
+                ),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

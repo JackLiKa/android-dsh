@@ -18,6 +18,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,8 +34,10 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
@@ -69,12 +72,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -83,6 +89,7 @@ import com.example.adsh.device.AdshAccessibilityService
 import com.example.adsh.device.AdshNotificationListenerService
 import com.example.adsh.device.DeviceCapabilities
 import com.example.adsh.engine.DshChatController
+import com.example.adsh.ui.AccentColor
 import com.example.adsh.ui.AdshTheme
 import com.example.adsh.ui.ThemeMode
 import kotlinx.coroutines.Dispatchers
@@ -128,11 +135,13 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             var themeMode by remember { mutableStateOf(ThemeMode.SYSTEM) }
+            var accentColor by remember { mutableStateOf(AccentColor.BLUE) }
             val themeScope = rememberCoroutineScope()
             LaunchedEffect(Unit) {
                 themeMode = ThemeMode.fromId(settings.themeMode())
+                accentColor = AccentColor.fromId(settings.accentColor())
             }
-            AdshTheme(themeMode) {
+            AdshTheme(themeMode, accentColor) {
                 App(
                     settings,
                     workspaceStore,
@@ -159,6 +168,11 @@ class MainActivity : ComponentActivity() {
                     { mode ->
                         themeMode = mode
                         themeScope.launch { settings.setThemeMode(mode.id) }
+                    },
+                    accentColor,
+                    { accent ->
+                        accentColor = accent
+                        themeScope.launch { settings.setAccentColor(accent.id) }
                     },
                     { voiceRequest.value = 0 },
                 )
@@ -233,6 +247,8 @@ private fun App(
     cancelFileChooser: () -> Unit,
     themeMode: ThemeMode,
     onThemeMode: (ThemeMode) -> Unit,
+    accentColor: AccentColor,
+    onAccentColor: (AccentColor) -> Unit,
     onVoiceRequestHandled: () -> Unit,
 ) {
     var page by remember { mutableStateOf(if (showConfig) "Plugins" else "Chat") }
@@ -448,17 +464,7 @@ private fun App(
                         )
                     } else {
                         Text("深度求索助手", style = MaterialTheme.typography.titleLarge)
-                        if (page == "Chat") {
-                            Text(
-                                chatState.connection,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (chatState.engineReady) {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                } else {
-                                    MaterialTheme.colorScheme.error
-                                },
-                            )
-                        } else {
+                        if (page != "Chat") {
                             Text(
                                 stringResource(R.string.current_profile, profile),
                                 style = MaterialTheme.typography.labelMedium,
@@ -501,7 +507,17 @@ private fun App(
                                     contentDescription = null,
                                 )
                             },
-                            label = { Text(stringResource(label)) },
+                            label = {
+                                Text(
+                                    stringResource(label),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.sp,
+                                        lineHeight = 13.sp,
+                                    ),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                )
+                            },
                         )
                     }
                 }
@@ -829,6 +845,48 @@ private fun App(
                                                 )
                                             },
                                         )
+                                    }
+                                }
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    stringResource(R.string.accent_section),
+                                    style = MaterialTheme.typography.titleSmall,
+                                )
+                                AccentColor.entries.chunked(2).forEach { rowAccents ->
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        rowAccents.forEach { accent ->
+                                            FilterChip(
+                                                modifier = Modifier.weight(1f),
+                                                selected = accentColor == accent,
+                                                onClick = { onAccentColor(accent) },
+                                                leadingIcon = {
+                                                    Box(
+                                                        Modifier
+                                                            .size(14.dp)
+                                                            .clip(CircleShape)
+                                                            .background(Color(accent.lightPrimary)),
+                                                    )
+                                                },
+                                                label = {
+                                                    Text(
+                                                        stringResource(
+                                                            when (accent) {
+                                                                AccentColor.BLUE -> R.string.accent_blue
+                                                                AccentColor.TEAL -> R.string.accent_teal
+                                                                AccentColor.PURPLE -> R.string.accent_purple
+                                                                AccentColor.ORANGE -> R.string.accent_orange
+                                                                AccentColor.ROSE -> R.string.accent_rose
+                                                                AccentColor.GREEN -> R.string.accent_green
+                                                            },
+                                                        ),
+                                                        maxLines = 1,
+                                                    )
+                                                },
+                                            )
+                                        }
                                     }
                                 }
                             }

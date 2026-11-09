@@ -3,7 +3,6 @@ package com.example.adsh.ui
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -29,6 +28,47 @@ enum class ThemeMode(val id: String) {
 
     companion object {
         fun fromId(id: String?): ThemeMode = entries.firstOrNull { it.id == id } ?: SYSTEM
+    }
+}
+
+enum class AccentColor(
+    val id: String,
+    val lightPrimary: Long,
+    val lightOnPrimary: Long,
+    val lightContainer: Long,
+    val lightOnContainer: Long,
+    val darkPrimary: Long,
+    val darkOnPrimary: Long,
+    val darkContainer: Long,
+    val darkOnContainer: Long,
+) {
+    BLUE(
+        "blue", 0xFF2E5CE6, 0xFFFFFFFF, 0xFFDDE3FF, 0xFF0A1B4D,
+        0xFFB5C4FF, 0xFF002780, 0xFF123FAE, 0xFFDDE3FF,
+    ),
+    TEAL(
+        "teal", 0xFF00695C, 0xFFFFFFFF, 0xFFB2DFDB, 0xFF00251F,
+        0xFF4DB6AC, 0xFF00382F, 0xFF005045, 0xFFB2DFDB,
+    ),
+    PURPLE(
+        "purple", 0xFF6A3DE8, 0xFFFFFFFF, 0xFFE8DDFF, 0xFF1F0060,
+        0xFFCBBEFF, 0xFF2D0096, 0xFF4527A0, 0xFFE8DDFF,
+    ),
+    ORANGE(
+        "orange", 0xFFB45309, 0xFFFFFFFF, 0xFFFFDCC2, 0xFF2E1500,
+        0xFFFFB77C, 0xFF4A2800, 0xFF7A3E00, 0xFFFFDCC2,
+    ),
+    ROSE(
+        "rose", 0xFFB3165B, 0xFFFFFFFF, 0xFFFFD9E2, 0xFF3E0021,
+        0xFFFFB1C8, 0xFF5E1134, 0xFF8E1249, 0xFFFFD9E2,
+    ),
+    GREEN(
+        "green", 0xFF2E7D32, 0xFFFFFFFF, 0xFFC8E6C9, 0xFF0B200C,
+        0xFF81C784, 0xFF00390A, 0xFF1B5E20, 0xFFC8E6C9,
+    );
+
+    companion object {
+        fun fromId(id: String?): AccentColor = entries.firstOrNull { it.id == id } ?: BLUE
     }
 }
 
@@ -171,6 +211,7 @@ private val AdshShapes = Shapes(
 @Composable
 fun AdshTheme(
     mode: ThemeMode = ThemeMode.SYSTEM,
+    accent: AccentColor = AccentColor.BLUE,
     content: @Composable () -> Unit,
 ) {
     val dark = when (mode) {
@@ -178,6 +219,20 @@ fun AdshTheme(
         ThemeMode.DARK -> true
         ThemeMode.SYSTEM -> isSystemInDarkTheme()
     }
+    val colors = (if (dark) DarkColors else LightColors).copy(
+        primary = Color(if (dark) accent.darkPrimary else accent.lightPrimary),
+        onPrimary = Color(if (dark) accent.darkOnPrimary else accent.lightOnPrimary),
+        primaryContainer = Color(if (dark) accent.darkContainer else accent.lightContainer),
+        onPrimaryContainer = Color(if (dark) accent.darkOnContainer else accent.lightOnContainer),
+        inversePrimary = Color(if (dark) accent.lightPrimary else accent.darkPrimary),
+        surfaceTint = Color(if (dark) accent.darkPrimary else accent.lightPrimary),
+        // Chip/navigation selected states are built from the secondary family, so keep them on
+        // the chosen accent instead of the fixed teal base palette.
+        secondary = Color(if (dark) accent.darkPrimary else accent.lightPrimary),
+        onSecondary = Color(if (dark) accent.darkOnPrimary else accent.lightOnPrimary),
+        secondaryContainer = Color(if (dark) accent.darkContainer else accent.lightContainer),
+        onSecondaryContainer = Color(if (dark) accent.darkOnContainer else accent.lightOnContainer),
+    )
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
@@ -186,10 +241,8 @@ fun AdshTheme(
             window.statusBarColor = android.graphics.Color.TRANSPARENT
             @Suppress("DEPRECATION")
             window.navigationBarColor = android.graphics.Color.TRANSPARENT
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                window.isStatusBarContrastEnforced = false
-                window.isNavigationBarContrastEnforced = false
-            }
+            window.isStatusBarContrastEnforced = false
+            window.isNavigationBarContrastEnforced = false
             WindowCompat.getInsetsController(window, view).apply {
                 isAppearanceLightStatusBars = !dark
                 isAppearanceLightNavigationBars = !dark
@@ -197,7 +250,7 @@ fun AdshTheme(
         }
     }
     MaterialTheme(
-        colorScheme = if (dark) DarkColors else LightColors,
+        colorScheme = colors,
         typography = AdshTypography,
         shapes = AdshShapes,
         content = content,

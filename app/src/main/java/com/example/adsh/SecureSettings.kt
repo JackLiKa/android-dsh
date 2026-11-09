@@ -26,6 +26,7 @@ class SecureSettings(private val context: Context) {
     private val deviceBridgeEnabled = stringPreferencesKey("device_bridge_enabled")
     private val deviceBridgeToken = stringPreferencesKey("device_bridge_token")
     private val themeModeKey = stringPreferencesKey("theme_mode")
+    private val accentColorKey = stringPreferencesKey("accent_color")
     private val remoteEngineKey = stringPreferencesKey("remote_engine_url")
 
     private fun key(): SecretKey {
@@ -86,6 +87,12 @@ class SecureSettings(private val context: Context) {
 
     suspend fun setThemeMode(value: String) {
         context.dataStore.edit { it[themeModeKey] = value }
+    }
+
+    suspend fun accentColor(): String = context.dataStore.data.first()[accentColorKey] ?: "blue"
+
+    suspend fun setAccentColor(value: String) {
+        context.dataStore.edit { it[accentColorKey] = value }
     }
 
     suspend fun saveRemoteEngineUrl(value: String?) {
