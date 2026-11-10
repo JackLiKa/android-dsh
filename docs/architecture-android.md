@@ -108,6 +108,13 @@ MCP 子进程环境会清除凭据型变量与 `DSH_*`，设备桥 token 只通�
 - 统一 4dp 栅格、16dp 页面边距、20dp 卡片圆角、28dp 弹层圆角。
 - 对话、历史、工作区、插件、设置、日志都覆盖加载、空与错误态；已按 360dp 宽 + 1.3 倍字体验证无横向溢出。
 
+## 原版 Web 界面与用量指标
+
+- `NativeDshWebView.kt` 用引擎启动时打印的 token 地址登录 `127.0.0.1:3080`，Cookie 已存在时直接打开根地址；主框架被限制在该地址，401 时携带 token 重试一次。
+- WebView 必须在拿到真实高度后创建。Compose `AndroidView` 首次布局前高度为 0，Blink 会把视口初始化为 0，页面里的 `html, body, #root { height: 100% }` 随之全部塌陷，表现为整页空白；`100vh` 与 `matchMedia` 的高度同样是 0，连 `about:blank` 也不例外。现在先用 `onGloballyPositioned` 量出可用高度，再以显式像素高度创建 WebView，并在尺寸变化时同步高度。
+- 上游 `ui-trajectory` 新增 `TrajectorySummary` 用量条：缓存命中率 = `cacheRead / (uncachedInput + cacheRead + cacheWrite)`，无计费输入显示 `—`，部分命中不会四舍五入成 100%；上下文占用 = `projectedTokens ?? pressureTokens` / `contextWindow`，只算 prompt 侧，窗口缺失时只显示已用 token；另显示会话 Token 与请求数。明细表每行也显示缓存命中率。
+- 原生 `TraceScreen` 通过 `SessionMeterStore` 读取 `dsh-native-home/storages/session_projcache/sessions/session-<id>.json` 的 `tokenUsage` 与 `contextPressure`，缓存命中率、上下文占用和会话 Token 与 Web 轨迹页保持同一口径；每轮结束重新读取，避免显示旧值。
+
 ## 目录索引
 
 | 路径 | 职责 |

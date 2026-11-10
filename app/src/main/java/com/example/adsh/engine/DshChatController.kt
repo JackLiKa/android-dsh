@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class DshChatState(
     val connection: String = "引擎未启动",
@@ -52,6 +53,7 @@ class DshChatController(
     private val persistSession: suspend (String?) -> Unit,
     private val fastModeProvider: () -> Boolean = { false },
     private val traceStore: TraceLogStore? = null,
+    private val meterStore: SessionMeterStore? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -85,6 +87,10 @@ class DshChatController(
     private var optimistic: String? = null
     private var running = false
     private var currentSession: String? = null
+    private var meterSession: String? = null
+    private var meter: SessionMeter? = null
+    private var meterLoading = false
+    private var meterLoaded = false
     private var pendingModel: DshModelOption? = null
     private var pendingEffort: String? = null
     private var streamClear: Job? = null
@@ -223,6 +229,7 @@ class DshChatController(
         optimistic = null
         running = false
         currentSession = sessionId
+        _trace.value = withMeter(TraceSnapshot())
         seedSession = null
         _state.update {
             it.copy(
@@ -668,7 +675,11 @@ class DshChatController(
     }
 
     private fun refreshTrace(persistTurn: Int? = null) {
-        val snapshot = TraceLog.parse(events)
+        if (persistTurn != null) {
+            meter = null
+            meterLoaded = false
+        }
+        val snapshot = withMeter(TraceLog.parse(events))
         _trace.value = snapshot
         val store = traceStore ?: return
         val session = currentSession
@@ -683,6 +694,32 @@ class DshChatController(
         scope.launch(Dispatchers.IO) {
             pending.forEach { store.append(TraceLog.turnRecord(session, it)) }
         }
+    }
+
+    private fun withMeter(snapshot: TraceSnapshot): TraceSnapshot {
+        val store = meterStore ?: return snapshot
+        val session = currentSession
+        if (session != meterSession) {
+            meterSession = session
+            meter = null
+            meterLoading = false
+            meterLoaded = false
+        }
+        if (meter == null && !meterLoading && !meterLoaded && session != null) {
+            meterLoading = true
+            scope.launch(Dispatchers.IO) {
+                val loaded = store.read(session)
+                withContext(Dispatchers.Main.immediate) {
+                    meterLoading = false
+                    meterLoaded = true
+                    if (meterSession == session) {
+                        meter = loaded
+                        _trace.update { it.copy(meter = loaded) }
+                    }
+                }
+            }
+        }
+        return snapshot.copy(meter = meter)
     }
 
     private fun inferRunning(events: List<Map<String, Any?>>): Boolean {

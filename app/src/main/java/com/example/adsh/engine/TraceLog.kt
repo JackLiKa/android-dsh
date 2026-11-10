@@ -92,6 +92,7 @@ data class TraceSnapshot(
     val turns: List<TraceTurn> = emptyList(),
     val provider: String? = null,
     val model: String? = null,
+    val meter: SessionMeter? = null,
 ) {
     val stepCount: Int get() = turns.sumOf { it.steps.size }
     val totalTokens: Int get() = turns.sumOf { it.tokens }

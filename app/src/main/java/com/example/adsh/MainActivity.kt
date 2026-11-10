@@ -326,6 +326,11 @@ private fun App(
     val traceStore = remember(context) {
         com.example.adsh.engine.TraceLogStore(java.io.File(context.filesDir, "logs/trace.jsonl"))
     }
+    val meterStore = remember(context) {
+        com.example.adsh.engine.SessionMeterStore(
+            java.io.File(context.filesDir, "dsh-native-home"),
+        )
+    }
     val controller = remember {
         DshChatController(
             cwdProvider = { workspacePath },
@@ -336,6 +341,7 @@ private fun App(
             },
             fastModeProvider = { fastThinking },
             traceStore = traceStore,
+            meterStore = meterStore,
         )
     }
     DisposableEffect(controller) {

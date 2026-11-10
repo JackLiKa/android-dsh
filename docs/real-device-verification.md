@@ -53,7 +53,9 @@
 | 抖音图文发布 | 通过“相册 → 图片 → 下一步 → 下一步 → 发作品”发布图文，权限设为“私密 · 仅自己可见”；随后在“我 → 作品 → 私密作品”打开作品，文案与“私密”标记一致。 |
 | 发布类审批门禁 | 繁体“發佈”、简体/繁体“发作品”、以及“限时日常”均被归类为 `SEND_MESSAGE`。实测三者都会弹出“发送消息需要确认”；点“拒绝”后工具返回“操作已被安全策略阻止”，点击未执行，并写入 `decision=DENY` 审计。 |
 | 截图 OCR 与剪贴板 | 微信、抖音的无障碍树为空或不可用时，`screen_ocr` 返回离线中文识别结果，配合坐标点击完成发送与发布；文本输入采用“前台写入剪贴板 → 回目标应用长按输入框 → 点貼上”，微信与朋友圈文案均成功落入输入框。 |
-| 轨迹归档 | 设置 `TraceLogStore(files/logs/trace.jsonl)` 后，每轮结束追加一条 JSONL；重启后按 `sessionId#turn` 读取已有键并补写已完成轮次，真机文件从 1 条补到 8 条。轨迹页显示“已归档 8 轮 · 39 步骤 · 33 工具 · 111.2 tok/s”，轮次卡片可展开查看逐步 TTFT、生成耗时、输出 TPS、token 与工具耗时，并支持复制/分享 Markdown。 |
+| 轨迹归档 | 设置 `TraceLogStore(files/logs/trace.jsonl)` 后，每轮结束追加一条 JSONL；重启后按 `sessionId#turn` 读取已有键并补写已完成轮次，真机文件从 1 条补到 8 条。轨迹页显示“已归档 18 轮 · logs/trace.jsonl”，轮次卡片可展开查看逐步 TTFT、生成耗时、输出 TPS、token 与工具耗时，并支持复制/分享 Markdown。 |
+| 原生轨迹用量摘要 | 2026-11-10 真机摘要新增“缓存命中 97.6% / 上下文 26% · 260.2k / 1M / 会话 Token 9.2M”，token 行改为“缓存读取 8.9M”，数字与 `dsh-native-home/storages/session_projcache/sessions/session-<id>.json` 的 `tokenUsage`/`contextPressure` 一致；顶部返回、标题与分享不再与状态栏重叠。 |
+| 原版 Web 轨迹页 | 打开“原版 dsh 界面”后对话与轨迹正常渲染。轨迹页用量条实测“缓存命中 98.6% · 上下文 10% · 104k / 1M · 会话 Token 11.3M · 请求 58 次”，横向可滚动查看；修前整页空白，DOM 中 `html`/`body`/`#root` 高度均为 0。 |
 
 ## 模拟器离线语音验证（2026-11-08）
 
@@ -95,6 +97,8 @@ adb -s emulator-5554 shell am instrument -w -r com.example.adsh.test/androidx.te
 12. **审批后点击被浮层吞掉**：审批浮层位于屏幕顶部，允许后立即重放的点击会落在尚未移除的浮层上。桥在允许后等待 350ms 再重新定位/点击，朋友圈与 QQ 空间的右上角发布按钮均一次成功。
 13. **审批切前台导致布局漂移**：应用内审批对话框会把目标应用挤出前台并收起键盘。改为无障碍悬浮窗审批，目标应用保持前台，键盘与坐标稳定；仅当允许后前台确实改变时才重新拉起并定位。
 14. **轨迹归档不完整**：原先只持久化当次进程内新结束的轮次，重启前已完成的轮次不会补写。`TraceLogStore.keys()` 读取磁盘上的 `sessionId#turn`，首次刷新时去重补写所有已完成轮次。
+15. **原版 Web 界面整页空白**：DOM 完整且无 JS 异常，但 `html`、`body`、`#root` 的 `getBoundingClientRect().height` 均为 0；探测显示该 WebView 里 `100vh`、`100dvh`、`100%` 全部解析为 0，连 `about:blank` 也一样，而系统 Chrome 打开同一测试页为 708 CSS px。这是 Compose `AndroidView` 在 WebView 尚未获得高度时创建、Blink 视口被初始化为 0 所致。修复方式：先用 `onGloballyPositioned` 量出可用高度，再以显式像素高度创建 WebView；修复后 `100vh` 恢复为 640 CSS px。
+16. **原生轨迹页顶部与状态栏重叠**：Trace 页面隐藏了通用顶栏，但自身没有处理系统栏 inset，返回、标题与分享图标压到状态栏上。给 `TraceScreen` 根布局加 `statusBarsPadding()`。
 
 ## 复现步骤
 

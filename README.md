@@ -109,8 +109,10 @@
   - 策略门禁补充：繁体“發佈”、简体/繁体“发作品/發作品/限时日常”等统一归为 `SEND_MESSAGE`；实测“私人發佈”“限时日常”“发作品”都会弹出“发送消息需要确认”，拒绝时不执行并写入 `DENY` 审计，避免发布类按钮绕过审批。
   - 审批浮层改为无障碍悬浮窗，审批期间目标应用保持前台、键盘与布局不漂移；允许后桥在重放点击前等待 350ms，避免右上角发布按钮被浮层吞掉。
   - 截图 OCR 回退：微信、抖音等无障碍树被屏蔽的应用通过 `screen_ocr` 识别后按坐标点击；文本输入先在 adsh 前台写入剪贴板，再回到目标应用长按输入框点“貼上”，避免后台剪贴板写入被忽略。
-  - 轨迹：每轮结束追加到 `files/logs/trace.jsonl`，记录状态、耗时、token/缓存、逐步 TTFT、TPS、工具耗时与截断后的文本预览；启动后按 `sessionId#turn` 去重并补写已完成轮次。真机轨迹页显示“已归档 8 轮 · 39 步骤 · 33 工具 · 111.2 tok/s”，支持复制与分享 Markdown。
-- 最终调试 APK：`apks/adsh-debug.apk`（609,694,613 字节），SHA-256 `2ce3bc65249bb0f83c9456429680727711ffe0e22fb40c083dd7c3933bdc298b`。
+  - 轨迹：每轮结束追加到 `files/logs/trace.jsonl`，记录状态、耗时、token/缓存、逐步 TTFT、TPS、工具耗时与截断后的文本预览；启动后按 `sessionId#turn` 去重并补写已完成轮次。真机轨迹页显示“已归档 18 轮 · logs/trace.jsonl”，摘要新增缓存命中率、上下文占用（如“26% · 260.2k / 1M”）与会话 Token，数据读取 Host 的 `session_projcache`，与 Web 轨迹页数字一致；仍支持复制与分享 Markdown。
+  - 原版 Web 轨迹页：新增用量条，显示缓存命中率（`cacheRead / (uncachedInput + cacheRead + cacheWrite)`，无计费输入显示 `—`，部分命中不会四舍五入成 100%）、上下文占用、会话 Token 与请求数；明细表每行也显示缓存命中率。真机实测“缓存命中 98.6% · 上下文 10% · 104k / 1M · 会话 Token 11.3M”。
+  - WebView 白屏修复：Compose `AndroidView` 创建 WebView 时尚未获得高度，Blink 视口被初始化为 0，`html, body, #root { height: 100% }` 因此全部塌陷；现在先用 `onGloballyPositioned` 量出可用高度，再以显式像素高度创建 WebView，真机 `100vh` 恢复为 640 CSS px。
+- 最终调试 APK：`apks/adsh-debug.apk`（609,694,613 字节），SHA-256 `f93044812a7092218b980d30c3910d01a61a21924acc1df00214c7d1225ad1bc`。
 
 ## 构建与安装
 

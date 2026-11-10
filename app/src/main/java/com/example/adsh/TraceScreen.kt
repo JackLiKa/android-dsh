@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -46,6 +47,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.adsh.engine.SessionMeter
 import com.example.adsh.engine.TraceSnapshot
 import com.example.adsh.engine.TraceStep
 import com.example.adsh.engine.TraceTurn
@@ -78,7 +80,7 @@ fun TraceScreen(
         buildTraceText(trace, sessionTitle, sessionId)
     }
 
-    Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Row(
             Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -170,8 +172,24 @@ private fun SummaryCard(trace: TraceSnapshot) {
             Row(Modifier.fillMaxWidth()) {
                 Metric("输入", formatTokens(trace.inputTokens), Modifier.weight(1f))
                 Metric("输出", formatTokens(trace.outputTokens), Modifier.weight(1f))
-                Metric("缓存命中", formatTokens(trace.cacheReadTokens), Modifier.weight(1f))
+                Metric("缓存读取", formatTokens(trace.cacheReadTokens), Modifier.weight(1f))
                 Metric("总计", formatTokens(trace.totalTokens), Modifier.weight(1.2f))
+            }
+            trace.meter?.let { meter ->
+                Spacer(Modifier.height(10.dp))
+                Row(Modifier.fillMaxWidth()) {
+                    Metric(
+                        "缓存命中",
+                        meter.cacheHitPercent?.let { "$it%" } ?: "—",
+                        Modifier.weight(1f),
+                    )
+                    Metric("上下文", contextLabel(meter), Modifier.weight(2.2f))
+                    Metric(
+                        "会话 Token",
+                        formatTokens(meter.sessionTokens),
+                        Modifier.weight(1f),
+                    )
+                }
             }
         }
     }
@@ -369,6 +387,12 @@ private fun buildTraceText(trace: TraceSnapshot, title: String?, sessionId: Stri
                 "输入 ${trace.inputTokens} · 输出 ${trace.outputTokens} · " +
                 "缓存 ${trace.cacheReadTokens} · 总计 ${trace.totalTokens}",
         )
+        trace.meter?.let { meter ->
+            appendLine(
+                "缓存命中 ${meter.cacheHitPercent?.let { "$it%" } ?: "—"} · " +
+                    "上下文 ${contextLabel(meter)} · 会话 Token ${meter.sessionTokens}",
+            )
+        }
         trace.turns.forEach { turn ->
             appendLine()
             appendLine("## 第 ${turn.turn} 轮 · ${turn.status} · ${turn.durationMs?.let(::formatDuration) ?: "—"}")
@@ -398,5 +422,24 @@ private fun formatDuration(ms: Long): String =
 
 private fun oneDecimal(value: Double): String = String.format(Locale.US, "%.1f", value)
 
-private fun formatTokens(count: Int): String =
-    if (count >= 1_000) String.format(Locale.US, "%.1fk", count / 1000.0) else count.toString()
+private fun contextLabel(meter: SessionMeter): String {
+    val used = meter.usedContextTokens ?: return "—"
+    val percent = meter.contextPercent
+    val window = meter.contextWindow
+    return if (percent != null && window != null) {
+        "$percent% · ${formatTokens(used)} / ${formatTokens(window)}"
+    } else {
+        formatTokens(used)
+    }
+}
+
+private fun formatTokens(count: Int): String = when {
+    count >= 1_000_000 -> compact(count / 1_000_000.0, "M")
+    count >= 1_000 -> compact(count / 1_000.0, "k")
+    else -> count.toString()
+}
+
+private fun compact(value: Double, unit: String): String {
+    val text = String.format(Locale.US, "%.1f", value)
+    return (if (text.endsWith(".0")) text.dropLast(2) else text) + unit
+}
